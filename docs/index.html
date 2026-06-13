@@ -8,6 +8,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Hanken+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<!-- Import lightweight chess library to process local moves and FEN generation -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <style>
 /* ==========================================================================
    LeWM-Chess research report.
@@ -291,6 +293,68 @@ pre.cmd .c{color:#6f6350} pre.cmd .g{color:var(--mint)}
 .tree{font-family:var(--mono);font-size:13px;color:#cdbfa4;line-height:1.85}
 .tree b{color:var(--tan);font-weight:500}
 
+/* ------- play demo ------- */
+.play-arena{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:32px;align-items:start;margin-top:10px}
+@media(max-width:880px){.play-arena{grid-template-columns:1fr}}
+.play-board-shell{border:1px solid var(--line-strong);border-radius:12px;padding:14px;background:var(--panel)}
+.play-board{
+  display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);
+  aspect-ratio:1;border-radius:6px;overflow:hidden;user-select:none;
+  container-type:size;box-shadow:0 14px 38px rgba(0,0,0,.45);
+}
+.play-board .sqr{position:relative;overflow:hidden;cursor:pointer}
+.play-board .sqr.l{background:var(--tan)} .play-board .sqr.d{background:var(--walnut)}
+.play-board .sqr.hl::after{content:"";position:absolute;inset:0;background:rgba(255,255,170,.42);mix-blend-mode:hard-light}
+.play-board .sqr.selected::after{content:"";position:absolute;inset:0;background:rgba(170,255,170,.45);mix-blend-mode:hard-light}
+.play-board .sqr.legal-dot::before{content:"";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:28%;height:28%;border-radius:50%;background:rgba(20,10,5,.22);z-index:4;pointer-events:none}
+.play-board .sqr.legal-dot.occupied::before{content:"";position:absolute;inset:0;border-radius:0;
+  background:none;border:4px solid rgba(20,10,5,.22);width:auto;height:auto;transform:none;top:0;left:0}
+.play-board .sqr .pc{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:9.8cqw;line-height:1;cursor:pointer;z-index:2;
+  text-shadow:0 1px 2px rgba(0,0,0,.35);
+}
+.play-board .sqr .pc.w{color:#fff} .play-board .sqr .pc.b{color:#1d1610}
+.play-board .sqr .coord{position:absolute;font-family:var(--mono);font-size:9px;opacity:.55;color:#3c2f22;pointer-events:none}
+.play-board .sqr .coord.f{right:3px;bottom:2px} .play-board .sqr .coord.r{left:3px;top:2px}
+.play-status{
+  margin-top:12px;padding:10px 14px;border-radius:8px;
+  font-family:var(--mono);font-size:13px;
+  border:1px solid var(--line);background:var(--panel-2);
+  min-height:42px;display:flex;align-items:center;gap:10px;
+}
+.play-status .dot{width:8px;height:8px;border-radius:50%;background:var(--tan);flex-shrink:0}
+.play-status .dot.thinking{background:var(--orchid);animation:pulse .9s ease-in-out infinite}
+.play-status .dot.err{background:var(--rose)}
+.play-status .dot.done{background:var(--mint)}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+.play-controls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.play-controls .btn{padding:8px 14px;font-size:13px}
+.play-side{display:flex;flex-direction:column;gap:16px}
+.play-log{
+  border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  max-height:340px;overflow-y:auto;padding:14px;
+  display:grid;grid-template-columns:auto 1fr 1fr;gap:2px 12px;
+  font-family:var(--mono);font-size:13px;align-content:start;
+}
+.play-log .num{color:#6f6350}
+.play-log .mv{padding:2px 6px;border-radius:4px;color:#d9ccb3}
+.play-log .mv.you{color:var(--tan)} .play-log .mv.model{color:var(--mint)}
+.play-info{border:1px solid var(--line);border-radius:12px;padding:18px 20px;background:var(--panel)}
+.play-info h4{font-family:var(--serif);font-size:17px;font-weight:500;margin-bottom:10px}
+.play-info p{font-size:14px;color:var(--muted);margin-bottom:8px}
+.play-info .badge{
+  display:inline-block;font-family:var(--mono);font-size:11.5px;padding:3px 9px;
+  border-radius:5px;border:1px solid var(--line);color:var(--muted);margin:2px 2px 0 0;
+}
+.wake-banner{
+  display:none;padding:10px 16px;border-radius:8px;margin-bottom:14px;
+  background:rgba(255,255,170,.07);border:1px solid rgba(255,255,170,.2);
+  font-family:var(--mono);font-size:12.5px;color:var(--butter);
+}
+.wake-banner.show{display:block}
+
 footer{
   border-top:1px solid var(--line);margin-top:90px;
   padding:46px 48px 60px;max-width:var(--maxw);margin-left:auto;margin-right:auto;
@@ -343,6 +407,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <a href="#latent"     data-s="latent"><b>h</b><span>Latent health</span></a>
   <a href="#games"      data-s="games"><b>i</b><span>vs. Stockfish</span></a>
   <a href="#reproduce"  data-s="reproduce"><b>j</b><span>Reproduce</span></a>
+  <a href="#play"       data-s="play"><b>k</b><span>Play it</span></a>
 </nav>
 
 <main>
@@ -793,6 +858,59 @@ code{white-space:normal;overflow-wrap:anywhere}
   </div>
 </section>
 
+<!-- ================= k · PLAY ================= -->
+<section id="play">
+  <div class="eyebrow rv"><span class="sq"></span>k · play it</div>
+  <h2 class="rv">The model is live. <em>Make a move.</em></h2>
+  <p class="rv">You play White. Click a piece, then click where to move it — legal destination squares
+  are highlighted. LeWM-Chess replies from its policy head, running on CPU via a
+  <a href="https://huggingface.co/spaces/fanXvirat/LeWM-chess" target="_blank" rel="noopener">Hugging Face Space</a>.
+  The first move may take ~30 s if the Space is waking up.</p>
+
+  <div class="wake-banner rv" id="wakeBanner">
+    ⏳ Waking the model — Hugging Face free-tier Spaces sleep after inactivity. Usually takes 20–40 s.
+  </div>
+
+  <div class="play-arena rv">
+    <!-- board -->
+    <div class="play-board-shell">
+      <div class="play-board" id="playBoard" aria-label="Interactive chess board — you play White"></div>
+      <div class="play-status" id="playStatus">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Your turn — click a White piece to begin.</span>
+      </div>
+      <div class="play-controls">
+        <button class="btn primary" id="btnNewGame">New game</button>
+        <button class="btn" id="btnUndo">← Undo</button>
+        <button class="btn" id="btnFlip">Flip board</button>
+      </div>
+    </div>
+
+    <!-- sidebar -->
+    <div class="play-side">
+      <div class="play-info">
+        <h4>How it works</h4>
+        <p>Your move is sent as a FEN string to the model's policy head. It picks the
+        highest-scoring legal move from its 20k-vocabulary logit output — no search,
+        pure imagination.</p>
+        <p>The model was never told the rules of chess. Every legal-move guarantee comes
+        from a legality mask applied to the raw logits at inference time.</p>
+        <div>
+          <span class="badge">100% legal moves</span>
+          <span class="badge">38% Stockfish top-1 match</span>
+          <span class="badge">12 cp median cost</span>
+          <span class="badge">pixel-trained only</span>
+        </div>
+      </div>
+      <div class="chart-card" style="margin:0">
+        <h4>Move log</h4>
+        <div class="sub">your moves in <span style="color:var(--tan)">tan</span> · model moves in <span style="color:var(--mint)">green</span></div>
+        <div class="play-log" id="playLog" aria-label="Move log" aria-live="polite"></div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="row">
     <div>
@@ -828,14 +946,14 @@ window.GAMES = {
       {"san":"a6","fen":"rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R","from":"a7","to":"a6"},
       {"san":"Be3","fen":"rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N1B3/PPP2PPP/R2QKB1R","from":"c1","to":"e3"},
       {"san":"e5","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/3NP3/2N1B3/PPP2PPP/R2QKB1R","from":"e7","to":"e5"},
-      {"san":"Nb3","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN1B3/PPP2PPP/R2QKB1R","from":"d4","to":"b3"},
-      {"san":"Ng4","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN1B3/PPP2PPP/R2QKB1R","from":"f6","to":"g4"},
-      {"san":"Bc1","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN5/PPP2PPP/R1BQKB1R","from":"e3","to":"c1"},
-      {"san":"Nf6","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN5/PPP2PPP/R1BQKB1R","from":"g4","to":"f6"},
-      {"san":"Bg5","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p1B1/4P3/1NN5/PPP2PPP/R2QKB1R","from":"c1","to":"g5"},
-      {"san":"Be7","fen":"rnbqk2r/1p2bppp/p2p1n2/4p1B1/4P3/1NN5/PPP2PPP/R2QKB1R","from":"f8","to":"e7"},
-      {"san":"Bxf6","fen":"rnbqk2r/1p2bppp/p2p1B2/4p3/4P3/1NN5/PPP2PPP/R2QKB1R","from":"g5","to":"f6"},
-      {"san":"Bxf6","fen":"rnbqk2r/1p3ppp/p2p1b2/4p3/4P3/1NN5/PPP2PPP/R2QKB1R","from":"e7","to":"f6"},
+      {"san":"Nb3","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN3B3/PPP2PPP/R2QKB1R","from":"d4","to":"b3"},
+      {"san":"Ng4","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN3B3/PPP2PPP/R2QKB1R","from":"f6","to":"g4"},
+      {"san":"Bc1","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN3/PPP2PPP/R1BQKB1R","from":"e3","to":"c1"},
+      {"san":"Nf6","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN3/PPP2PPP/R1BQKB1R","from":"g4","to":"f6"},
+      {"san":"Bg5","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p1B1/4P3/1NN3/PPP2PPP/R2QKB1R","from":"c1","to":"g5"},
+      {"san":"Be7","fen":"rnbqk2r/1p2bppp/p2p1n2/4p1B1/4P3/1NN3/PPP2PPP/R2QKB1R","from":"f8","to":"e7"},
+      {"san":"Bxf6","fen":"rnbqk2r/1p2bppp/p2p1B2/4p3/4P3/1NN3/PPP2PPP/R2QKB1R","from":"g5","to":"f6"},
+      {"san":"Bxf6","fen":"rnbqk2r/1p3ppp/p2p1b2/4p3/4P3/1NN3/PPP2PPP/R2QKB1R","from":"e7","to":"f6"},
       {"san":"Qd3","fen":"rnbqk2r/1p3ppp/p2p1b2/4p3/4P3/1NNQ4/PPP2PPP/R3KB1R","from":"d1","to":"d3"},
       {"san":"Bg5","fen":"rnbqk2r/1p3ppp/p2p4/4p1b1/4P3/1NNQ4/PPP2PPP/R3KB1R","from":"f6","to":"g5"},
       {"san":"Nd5","fen":"rnbqk2r/1p3ppp/p2p4/3Np1b1/4P3/1N1Q4/PPP2PPP/R3KB1R","from":"c3","to":"d5"},
@@ -858,12 +976,12 @@ window.GAMES = {
       {"san":"Nxd4","fen":"r2q1r1k/1p4pp/p2p4/3N1b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"c6","to":"d4"},
       {"san":"Ne7","fen":"r2q1r1k/1p2N1pp/p2p4/5b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"d5","to":"e7"},
       {"san":"Qb6","fen":"r4r1k/1p2N1pp/pq1p4/5b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"d8","to":"b6"},
-      {"san":"cxd4","fen":"r4r1k/1p2N1pp/pq1p4/5b2/3Pp2P/6P1/PP1K1PB1/R6R","from":"c3","to":"d4"},
-      {"san":"Qxb2+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/6P1/Pq1K1PB1/R6R","from":"b6","to":"b2"},
-      {"san":"Ke3","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/4K1P1/Pq3PB1/R6R","from":"d2","to":"e3"},
-      {"san":"Qc3+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/2q1K1P1/P4PB1/R6R","from":"b2","to":"c3"},
-      {"san":"Kf4","fen":"r4r1k/1p2N1pp/p2p4/5b2/3PpK1P/2q3P1/P4PB1/R6R","from":"e3","to":"f4"},
-      {"san":"Qd2#","fen":"r4r1k/1p2N1pp/p2p4/5b2/3PpK1P/6P1/P2q1PB1/R6R","from":"c3","to":"d2"}
+      {"san":"cxd4","fen":"r4r1k/1p2N1pp/pq1p4/5b2/3Np2P/6P1/PP1K1PB1/R6R","from":"c3","to":"d4"},
+      {"san":"Qxb2+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Np2P/6P1/Pq1K1PB1/R6R","from":"b6","to":"b2"},
+      {"san":"Ke3","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Np2P/4K1P1/Pq3PB1/R6R","from":"d2","to":"e3"},
+      {"san":"Qc3+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Np2P/2q1K1P1/P4PB1/R6R","from":"b2","to":"c3"},
+      {"san":"Kf4","fen":"r4r1k/1p2N1pp/p2p4/5b2/3NpK1P/2q3P1/P4PB1/R6R","from":"e3","to":"f4"},
+      {"san":"Qd2#","fen":"r4r1k/1p2N1pp/p2p4/5b2/3NpK1P/6P1/P2q1PB1/R6R","from":"c3","to":"d2"}
     ]
   },
   "d18": {
@@ -980,7 +1098,6 @@ document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
   const phaseEl=document.getElementById("heroPhase");
   const game=window.GAMES.d18;
   const fens=[game.start, ...game.plies.slice(0,28).map(p=>p.fen)];
-  // No Unicode tags, HTML native tags are used instead for better rendering
   const sans=["—", ...game.plies.slice(0,28).map(p=>p.san)];
 
   function parse(fen){
@@ -1040,7 +1157,6 @@ document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
     board();
     if(dt<T.hold){
       A.forEach(d=>disk(d.x,d.y,d.rr,d.col,1));
-      // Native HTML for guaranteed rendering
       phaseEl.innerHTML=`encode &middot; z<sub>t</sub> &middot; ply ${idx}`;
     } else if(dt<T.hold+T.diss){
       const p=ease((dt-T.hold)/T.diss);
@@ -1074,7 +1190,7 @@ document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
 })();
 
 /* ====================================================================
-   ARCHITECTURE PIPELINE — final: labels separated, no text collisions
+   ARCHITECTURE PIPELINE
    ==================================================================== */
 (function pipeline(){
   const svg=document.getElementById("pipeSVG"); if(!svg) return;
@@ -1098,7 +1214,6 @@ document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
   }
   frames+=`<text x="91" y="278" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="11.5" fill="#c8b797">16 frames · 128×128 px</text>`;
 
-  // using HTML tspan for native accurate subscripts everywhere
   const zRow=[0,1,2,3].map(i=>lat(395+i*46,205,"#aaaaff",
     i===0?'z<tspan dy="3" font-size="8.5">t</tspan>':
     i===1?'z<tspan dy="3" font-size="8.5">t+1</tspan>':
@@ -1151,7 +1266,7 @@ document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
 })();
 
 /* ====================================================================
-   CHARTS — line charts, causal bars, drift
+   CHARTS
    ==================================================================== */
 const DATA={
   ep:[1,2,3,4,5,6,7,8,9,10],
@@ -1202,7 +1317,7 @@ lineChart(document.getElementById("lossChart"),
   4,v=>v.toFixed(1));
 
 /* ====================================================================
-   InfoNCE chart — final: high contrast, large labels, no collisions
+   InfoNCE chart
    ==================================================================== */
 (function nce(){
   const svg=document.getElementById("nceChart"); if(!svg) return;
@@ -1250,7 +1365,7 @@ lineChart(document.getElementById("lossChart"),
 })();
 
 /* ====================================================================
-   FIX C: Bound chart — previously blank, now draws the Lipschitz theorem viz
+   Bound chart
    ==================================================================== */
 (function bound(){
   const svg=document.getElementById("boundChart"); if(!svg) return;
@@ -1298,7 +1413,6 @@ lineChart(document.getElementById("lossChart"),
       svg.appendChild(el("circle",{cx:Xsc(k),cy:Ysc(v),r:5,fill:"#aaaaff","stroke":"#261d15","stroke-width":"1.5"}));
       if(k>0) svg.appendChild(txt(Xsc(k),Ysc(v)-10,v.toFixed(2),"#aaaaff",9.5));
     });
-    // connect measured dots
     const mpath=measured.map((v,k)=>(k?"L":"M")+Xsc(k)+","+Ysc(v)).join("");
     svg.insertBefore(el("path",{d:mpath,fill:"none",stroke:"#aaaaff","stroke-width":1.6,opacity:.6}),
       svg.querySelector("circle"));
@@ -1309,7 +1423,7 @@ lineChart(document.getElementById("lossChart"),
     svg.appendChild(el("circle",{cx:L+14,cy:T+26,r:4,fill:"#aaaaff"}));
     svg.appendChild(txt(L+26,T+30,"measured drift","#aaaaff",10,"start"));
 
-    // saturation line at measured plateau
+    // saturation line
     svg.appendChild(el("line",{x1:L,x2:W-R,y1:Ysc(0.62),y2:Ysc(0.62),
       stroke:"rgba(170,170,255,.35)","stroke-dasharray":"3 5"}));
     svg.appendChild(txt(W-R-2,Ysc(0.62)-5,"plateau 0.62","#aaaaff",9,"end"));
@@ -1329,7 +1443,7 @@ lineChart(document.getElementById("lossChart"),
 })();
 
 /* ====================================================================
-   FIX D: Scheduled sampling strip — previously empty, now populated
+   Scheduled sampling strip
    ==================================================================== */
 (function scheduledSampling(){
   const strip=document.getElementById("ssStrip");
@@ -1340,7 +1454,6 @@ lineChart(document.getElementById("lossChart"),
   if(!strip) return;
 
   const CELLS=14;
-  // Build cells
   for(let i=0;i<CELLS;i++){
     const c=document.createElement("div");
     c.className="ss-cell gt";
@@ -1349,9 +1462,7 @@ lineChart(document.getElementById("lossChart"),
   }
 
   function update(epoch){
-    // anneal p from 0 to 0.5 over epochs 1-10
     const p=0.5*Math.max(0,(epoch-1)/9);
-    // expected number of model-predicted frames in window
     const modelCount=Math.round(p*CELLS);
     const cells=[...strip.querySelectorAll(".ss-cell")];
     cells.forEach((c,i)=>{
@@ -1367,7 +1478,6 @@ lineChart(document.getElementById("lossChart"),
   update(1);
   if(slider) slider.addEventListener("input",()=>update(parseInt(slider.value)));
 
-  // auto-animate on first intersection
   const io=new IntersectionObserver(es=>es.forEach(e=>{
     if(!e.isIntersecting||REDUCED) return;
     let ep=1;
@@ -1472,7 +1582,6 @@ lineChart(document.getElementById("lossChart"),
     const g=grid(fenAt(ply));
     const last=ply>0?window.GAMES[cur].plies[ply-1]:null;
     boardEl.innerHTML="";
-    // safety guard to ensure exactly 64 squares no matter what
     g.slice(0, 64).forEach((ch,i)=>{
       const r=Math.floor(i/8), f=i%8;
       const sq=document.createElement("div");
@@ -1545,7 +1654,6 @@ lineChart(document.getElementById("lossChart"),
     oppLabel.textContent="Stockfish d"+cur.slice(1);
     buildList(); render();
   }));
-  // FIX: guard arrow keys so they don't fire when user is in an input
   document.addEventListener("keydown",e=>{
     if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
     if(e.key==="ArrowRight"){stop();step(1);}
@@ -1553,6 +1661,251 @@ lineChart(document.getElementById("lossChart"),
   });
 
   buildList(); render();
+})();
+
+/* ====================================================================
+   LIVE PLAY DEMO — calls HF Space API via robust @gradio/client
+   ==================================================================== */
+(async function playDemo(){
+  const boardEl  = document.getElementById("playBoard"); if(!boardEl) return;
+  const statusDot  = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const logEl      = document.getElementById("playLog");
+  const wakeBanner = document.getElementById("wakeBanner");
+
+  const GLYPH = {K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙",k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"};
+  const FILES = "abcdefgh";
+
+  // ---- minimal chess state backed by chess.js ----
+  let chessGame = new Chess();
+  let fen       = chessGame.fen();
+  let selected  = null;   
+  let legalSquares = []; 
+  let flipped   = false;
+  let busy      = false;
+  let firstRequest = true;
+
+  // Gradio client
+  let hfClient = null;
+
+  // ---- FEN helpers ----
+  function fenBoard(f){
+    const rows = f.split(" ")[0].split("/");
+    const g = new Array(64).fill(null);
+    rows.forEach((row,r)=>{
+      let c=0;
+      for(const ch of row){
+        if(/\d/.test(ch)){c+=+ch;}
+        else{g[r*8+c]=ch;c++;}
+      }
+    });
+    return g;
+  }
+
+  function sqIdx(file,rank){ return rank*8+file; } 
+  function idxToAlg(i){ return FILES[i%8]+(8-Math.floor(i/8)); }
+  function algToIdx(s){ return (8-parseInt(s[1]))*8+FILES.indexOf(s[0]); }
+
+  // ---- render board ----
+  function render(){
+    const board = fenBoard(fen);
+    boardEl.innerHTML="";
+    for(let vi=0;vi<64;vi++){
+      const i = flipped ? 63-vi : vi;
+      const r = Math.floor(i/8), f = i%8;
+      const sq = document.createElement("div");
+      sq.className="sqr "+((r+f)%2===0?"l":"d");
+      sq.dataset.idx=i;
+
+      if(selected===i) sq.classList.add("selected");
+      if(legalSquares.includes(i)){
+        sq.classList.add("legal-dot");
+        if(board[i]) sq.classList.add("occupied");
+      }
+
+      if(f===7){const c=document.createElement("span");c.className="coord r";c.textContent=8-r;sq.appendChild(c);}
+      if(r===7){const c=document.createElement("span");c.className="coord f";c.textContent=FILES[f];sq.appendChild(c);}
+
+      if(board[i]){
+        const white = board[i] === board[i].toUpperCase();
+        const t = board[i].toUpperCase();
+        const s = document.createElement("span");
+        s.className = "pc " + (white ? "w" : "b");
+        s.textContent = GLYPH[white ? t : t.toLowerCase()];
+        sq.appendChild(s);
+      }
+      sq.addEventListener("click", () => handleClick(i));
+      boardEl.appendChild(sq);
+    }
+  }
+
+  // ---- click handler ----
+  function handleClick(idx){
+    if(busy) return;
+    if(chessGame.turn() !== "w"){ setStatus("idle","Wait — model is thinking."); return; }
+
+    const alg = idxToAlg(idx);
+
+    // if a highlighted legal destination is clicked
+    if(legalSquares.includes(idx) && selected !== null){
+      const fromAlg = idxToAlg(selected);
+      const moves = chessGame.moves({ square: fromAlg, verbose: true });
+      const move = moves.find(m => m.to === alg);
+      if (move) {
+          sendPlayerMove(move.from + move.to + (move.promotion || ""));
+      }
+      return;
+    }
+
+    // select own piece
+    const pc = chessGame.get(alg);
+    if(pc && pc.color === "w"){
+      selected = idx;
+      const moves = chessGame.moves({ square: alg, verbose: true });
+      legalSquares = moves.map(m => algToIdx(m.to));
+      setStatus("idle","Selected "+alg+" — click a highlighted square to move.");
+    } else {
+      selected = null; legalSquares = [];
+      setStatus("idle","Your turn — click a White piece to begin.");
+    }
+    render();
+  }
+
+  // ---- send player move → get model reply ----
+  async function sendPlayerMove(uci){
+    busy = true; selected = null; legalSquares = [];
+    setStatus("thinking","Sending your move…");
+
+    // 1. Process player move locally via chess.js to get exact FEN
+    const from = uci.substring(0, 2);
+    const to = uci.substring(2, 4);
+    const promotion = uci.length === 5 ? uci[4] : undefined;
+    
+    const playerMoveObj = chessGame.move({ from, to, promotion, sloppy: true });
+    if (!playerMoveObj) {
+       setStatus("err", "Invalid move attempted.");
+       busy = false; render(); return;
+    }
+    
+    fen = chessGame.fen();
+    appendLog(playerMoveObj.san, "you");
+    render(); // Update UI instantly to show player's move
+
+    // 2. Request model move via API
+    setStatus("thinking","LeWM is imagining…");
+    if (firstRequest) { wakeBanner.classList.add("show"); firstRequest = false; }
+
+    try {
+      if(!hfClient) {
+        const { Client } = await import("https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js");
+        hfClient = await Client.connect("fanXvirat/LeWM-chess");
+      }
+
+      // Try fn_index 0 (most robust for single-function spaces)
+      let r2;
+      try {
+          r2 = await hfClient.predict(0, [fen]);
+      } catch (err) {
+          // fallback if endpoint was explicitly named predict
+          r2 = await hfClient.predict("/predict", [fen]);
+      }
+
+      const state2 = r2.data[0]; 
+      wakeBanner.classList.remove("show");
+
+      if (!state2 || state2.status === "error") {
+          throw new Error(state2.message || "Server returned an error");
+      }
+      
+      // 3. Process model move locally
+      if (state2.move) {
+         const mFrom = state2.move.substring(0, 2);
+         const mTo = state2.move.substring(2, 4);
+         const mPromo = state2.move.length === 5 ? state2.move[4] : undefined;
+         const modelMoveObj = chessGame.move({ from: mFrom, to: mTo, promotion: mPromo, sloppy: true });
+         
+         fen = chessGame.fen(); 
+         appendLog(modelMoveObj ? modelMoveObj.san : state2.move, "model");
+      }
+
+      if (state2.status !== "ongoing") { endGame(state2.status); return; }
+      setStatus("done", "Model played " + (state2.move || "") + ". Your turn.");
+      
+    } catch(e) {
+      wakeBanner.classList.remove("show");
+      console.error("Gradio API error:", e);
+      setStatus("err", "Error: " + (e.message || "Failed to connect") + ". Check the HF Space.");
+      
+      // Undo local move so user isn't stuck
+      chessGame.undo();
+      fen = chessGame.fen();
+    } finally {
+      busy = false; 
+      render();
+    }
+  }
+
+  function endGame(result){
+    busy=false;
+    const msg = result==="1-0"?"White wins (1–0)":result==="0-1"?"Black wins (0–1)":"Draw (½–½)";
+    setStatus("done","Game over — "+msg+". Press New Game to play again.");
+    render();
+  }
+
+  function setStatus(state, text){
+    statusText.textContent=text;
+    statusDot.className="dot";
+    if(state==="thinking") statusDot.classList.add("thinking");
+    else if(state==="err")  statusDot.classList.add("err");
+    else if(state==="done") statusDot.classList.add("done");
+  }
+
+  function appendLog(san, who){
+    const youMoves = logEl.querySelectorAll(".mv.you").length;
+
+    if(who==="you"){
+      const num=document.createElement("span"); num.className="num";
+      num.textContent=(youMoves+1)+".";
+      logEl.appendChild(num);
+      const mv=document.createElement("span"); mv.className="mv you";
+      mv.textContent=san; logEl.appendChild(mv);
+      const ph=document.createElement("span"); ph.className="mv"; ph.textContent="…";
+      ph.id="modelPH"; logEl.appendChild(ph);
+    } else {
+      const ph=document.getElementById("modelPH");
+      if(ph){ ph.className="mv model"; ph.textContent=san; ph.removeAttribute("id"); }
+      else {
+        const num=document.createElement("span"); num.className="num"; num.textContent="";
+        logEl.appendChild(num);
+        const mv=document.createElement("span"); mv.className="mv"; logEl.appendChild(mv);
+        const m=document.createElement("span"); m.className="mv model"; m.textContent=san;
+        logEl.appendChild(m);
+      }
+    }
+    logEl.scrollTop=logEl.scrollHeight;
+  }
+
+  // ---- controls ----
+  document.getElementById("btnNewGame").onclick=()=>{
+    chessGame.reset();
+    fen = chessGame.fen();
+    selected = null; legalSquares = []; busy = false; firstRequest = true;
+    logEl.innerHTML = ""; wakeBanner.classList.remove("show");
+    setStatus("idle", "Your turn — click a White piece to begin.");
+    render();
+  };
+
+  document.getElementById("btnUndo").onclick=()=>{
+    setStatus("idle","Undo not supported cleanly without a session — press New Game to restart.");
+  };
+
+  document.getElementById("btnFlip").onclick=()=>{
+    flipped=!flipped; render();
+  };
+
+  // ---- init ----
+  setStatus("idle","Your turn — click a White piece to begin.");
+  render();
 })();
 </script>
 </body>
