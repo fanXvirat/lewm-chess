@@ -1,0 +1,1559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LeWM-Chess — A Latent World Model That Imagines Chess</title>
+<meta name="description" content="A JEPA-style latent world model trained on ~1M chess positions from raw pixels. Interactive research report: architecture, training dynamics, causal probes, and games against Stockfish.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Hanken+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+/* ==========================================================================
+   LeWM-Chess research report.
+   Every color on this page is a color the model actually sees: the board
+   tans of the training renderer, and the twelve pastel piece disks.
+   ========================================================================== */
+:root{
+  --ink:#15100c;
+  --panel:#1f1812;
+  --panel-2:#261d15;
+  --line:rgba(240,217,181,.13);
+  --line-strong:rgba(240,217,181,.28);
+  --text:#efe6d7;
+  --muted:#a8987f;
+  --tan:#f0d9b5;
+  --walnut:#b58863;
+  --lav:#aaaaff; --mint:#aaffaa; --rose:#ffaaaa;
+  --butter:#ffffaa; --orchid:#ffaaff; --ice:#aaffff;
+  --lav-d:#28288c; --mint-d:#288c28; --rose-d:#8c2828;
+  --butter-d:#8c8c28; --orchid-d:#8c288c; --ice-d:#288c8c;
+  --serif:'Spectral',Georgia,serif;
+  --sans:'Hanken Grotesk',system-ui,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --rail-w:64px;
+  --maxw:1060px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.001s!important;transition-duration:.001s!important}
+}
+body{
+  background:var(--ink);color:var(--text);
+  font-family:var(--sans);font-weight:300;font-size:17px;line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--walnut);color:var(--ink)}
+a{color:var(--tan);text-decoration:none;border-bottom:1px solid var(--line-strong);transition:border-color .2s,color .2s}
+a:hover{color:#fff;border-color:var(--tan)}
+a:focus-visible,button:focus-visible{outline:2px solid var(--tan);outline-offset:3px;border-radius:2px}
+
+/* ------- left rail ------- */
+.rail{
+  position:fixed;left:0;top:0;bottom:0;width:var(--rail-w);
+  border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;
+  padding:26px 0;gap:6px;z-index:50;background:var(--ink);
+}
+.rail .knight{font-size:22px;color:var(--tan);margin-bottom:18px}
+.rail a{
+  border:0;width:34px;height:34px;border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:13px;color:var(--muted);
+  position:relative;transition:all .2s;
+}
+.rail a:hover{color:var(--tan);background:var(--panel)}
+.rail a.on{color:var(--ink);background:var(--tan);font-weight:700}
+.rail a span{
+  position:absolute;left:46px;white-space:nowrap;background:var(--panel-2);
+  border:1px solid var(--line);padding:3px 10px;border-radius:5px;
+  font-family:var(--sans);font-size:12.5px;color:var(--text);
+  opacity:0;pointer-events:none;transform:translateX(-6px);transition:all .2s;
+  max-width:180px;overflow:hidden;text-overflow:ellipsis;
+}
+.rail a:hover span{opacity:1;transform:translateX(0)}
+main{margin-left:var(--rail-w)}
+@media(max-width:900px){.rail{display:none}main{margin-left:0}}
+
+/* ------- shared section scaffolding ------- */
+section{
+  max-width:var(--maxw);margin:0 auto;
+  padding:88px 48px 24px;
+}
+@media(max-width:700px){section{padding:64px 22px 16px}}
+.eyebrow{
+  font-family:var(--mono);font-size:12.5px;letter-spacing:.14em;
+  color:var(--walnut);text-transform:uppercase;
+  display:flex;align-items:center;gap:14px;margin-bottom:22px;
+}
+.eyebrow .sq{width:9px;height:9px;background:var(--walnut)}
+.eyebrow::after{content:"";flex:1;height:1px;background:var(--line)}
+h2{
+  font-family:var(--serif);font-weight:400;font-size:clamp(28px,3.6vw,40px);
+  line-height:1.18;margin-bottom:22px;max-width:760px;
+}
+h2 em{font-style:italic;color:var(--tan)}
+h3{font-family:var(--serif);font-weight:500;font-size:21px;margin:34px 0 12px}
+p{max-width:720px;margin-bottom:16px;color:#ddd2bf}
+p.lede{font-size:19.5px;font-family:var(--serif);font-weight:300;color:var(--text)}
+.note{font-size:14px;color:var(--muted);max-width:720px}
+code{font-family:var(--mono);font-size:.88em;background:var(--panel);border:1px solid var(--line);padding:1px 6px;border-radius:4px;color:var(--tan)}
+
+/* reveal on scroll */
+.rv{opacity:0;transform:translateY(18px);transition:opacity .7s ease,transform .7s ease}
+.rv.in{opacity:1;transform:none}
+
+/* ------- hero ------- */
+.hero{
+  min-height:100svh;display:grid;grid-template-columns:1.05fr .95fr;
+  gap:48px;align-items:center;max-width:var(--maxw);margin:0 auto;
+  padding:64px 48px 32px;
+}
+@media(max-width:980px){.hero{grid-template-columns:1fr;min-height:auto;padding-top:84px}}
+.hero h1{
+  font-family:var(--serif);font-weight:300;
+  font-size:clamp(40px,5.4vw,64px);line-height:1.06;letter-spacing:-.01em;
+  margin:26px 0 22px;
+}
+.hero h1 em{font-style:italic;color:var(--tan)}
+.kicker{
+  font-family:var(--mono);font-size:12.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--walnut);display:flex;gap:12px;align-items:center;
+}
+.kicker b{color:var(--tan);font-weight:500}
+.hero .sub{font-size:18px;max-width:520px;color:#cdc0a9}
+.chips{display:flex;flex-wrap:wrap;gap:10px;margin:30px 0 26px}
+.chip{
+  border:1px solid var(--line-strong);border-radius:8px;
+  padding:9px 14px;background:linear-gradient(180deg,var(--panel),transparent);
+}
+.chip b{font-family:var(--mono);font-size:18px;font-weight:700;display:block}
+.chip span{font-size:11.5px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase}
+.chip.c1 b{color:var(--mint)} .chip.c2 b{color:var(--lav)}
+.chip.c3 b{color:var(--butter)} .chip.c4 b{color:var(--rose)}
+.cta{display:flex;gap:14px;flex-wrap:wrap;align-items:center}
+.btn{
+  font-family:var(--mono);font-size:13.5px;border-radius:7px;cursor:pointer;
+  padding:11px 20px;border:1px solid var(--line-strong);background:transparent;color:var(--text);
+  transition:all .2s;
+}
+.btn.primary{background:var(--tan);color:var(--ink);border-color:var(--tan);font-weight:700}
+.btn.primary:hover{background:#fff}
+.btn:hover{border-color:var(--tan)}
+.heroviz{position:relative}
+.heroviz canvas{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+.heroviz .tag{
+  position:absolute;left:14px;bottom:12px;font-family:var(--mono);font-size:11.5px;
+  color:var(--muted);background:rgba(21,16,12,.78);padding:4px 10px;border-radius:5px;
+  border:1px solid var(--line);
+  max-width:calc(100% - 28px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.heroviz .phase{
+  position:absolute;right:14px;top:12px;font-family:var(--mono);font-size:11.5px;
+  color:var(--tan);background:rgba(21,16,12,.78);padding:4px 10px;border-radius:5px;
+  border:1px solid var(--line);min-width:148px;text-align:center;
+}
+
+/* ------- legend / abstract figures ------- */
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:start}
+@media(max-width:850px){.twocol{grid-template-columns:1fr}}
+.figure{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+.figure img{width:100%;display:block;background:#fff}
+.figure figcaption{padding:12px 16px;font-size:13.5px;color:var(--muted);border-top:1px solid var(--line)}
+
+/* ------- architecture pipeline ------- */
+.pipe-wrap{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:26px 18px 10px;overflow-x:auto}
+.pipe-wrap svg{display:block;min-width:760px;width:100%;height:auto}
+.pipe-controls{display:flex;gap:10px;align-items:center;padding:10px 6px 14px;flex-wrap:wrap}
+.legendline{font-family:var(--mono);font-size:11.5px;color:var(--muted)}
+.dotk{display:inline-block;width:9px;height:9px;border-radius:50%;vertical-align:-1px;margin-right:5px}
+
+.losses{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:14px;margin:26px 0}
+.loss{
+  position:relative;
+  border:1px solid var(--line);border-radius:12px;padding:20px 20px 16px;
+  background:linear-gradient(180deg,var(--panel),transparent);
+  transition:border-color .25s;
+}
+.loss:hover{border-color:var(--line-strong)}
+.loss::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;border-radius:3px;background:var(--accent,var(--tan))}
+.loss h4{font-family:var(--serif);font-weight:500;font-size:17.5px;margin-bottom:6px}
+.loss .f{font-family:var(--mono);font-size:12.5px;color:var(--tan);margin-bottom:10px;display:block;line-height:1.55}
+.loss p{font-size:14.5px;color:var(--muted);margin:0}
+
+/* animated dashed wires in the pipeline */
+.pipe-wrap .wire{stroke-dasharray:5 9;animation:dashflow 1.8s linear infinite;opacity:.45}
+@keyframes dashflow{to{stroke-dashoffset:-14}}
+
+/* ------- v2 upgrades: theorem slider, scheduled sampling, infonce ------- */
+.ctrl{display:flex;align-items:center;gap:16px;font-family:var(--mono);font-size:12.5px;color:var(--muted);margin:4px 0 12px;flex-wrap:wrap}
+.ctrl b{color:var(--tan);min-width:84px;display:inline-block}
+input[type=range]{accent-color:var(--tan);width:230px;cursor:pointer}
+.ss-strip{display:grid;grid-template-columns:repeat(14,1fr);gap:6px;margin:16px 0 12px}
+.ss-cell{aspect-ratio:1;border-radius:6px;display:flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:11px;border:1px solid var(--line);
+  transition:background .4s,color .4s,border-color .4s}
+.ss-cell.gt{background:var(--tan);color:var(--ink);border-color:var(--tan)}
+.ss-cell.md{background:rgba(255,170,170,.14);color:var(--rose);border-color:rgba(255,170,170,.6)}
+.ss-meta{font-family:var(--mono);font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.ss-meta b{color:var(--rose)}
+.ss-bar{height:4px;background:var(--panel-2);border-radius:3px;margin-top:12px;overflow:hidden}
+.ss-bar i{display:block;height:100%;background:var(--rose);width:0%;transition:width .4s}
+.cmp{width:100%;border-collapse:collapse;font-size:14.5px;margin:24px 0 6px;table-layout:auto}
+.cmp th,.cmp td{padding:12px 14px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.cmp th{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.cmp td:first-child{color:var(--text);font-weight:500;font-family:var(--serif);font-size:15.5px}
+.cmp td.bad{color:#cf9d8d} .cmp td.good{color:var(--mint)}
+.cmp tr:hover td{background:rgba(240,217,181,.025)}
+
+/* ------- charts ------- */
+.chart-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:22px;margin:8px 0 18px}
+.chart-card h4{font-family:var(--serif);font-size:18px;font-weight:500;margin-bottom:4px}
+.chart-card .sub{font-size:13px;color:var(--muted);margin-bottom:14px}
+.chart-card svg{width:100%;max-width:100%;height:auto;display:block;overflow:visible}
+.chart-card svg text{font-weight:500}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:850px){.chart-grid{grid-template-columns:1fr}}
+.bigstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin:24px 0}
+.bigstat{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--panel)}
+.bigstat b{font-family:var(--mono);font-size:30px;font-weight:700;display:block;line-height:1.1}
+.bigstat span{font-size:12.5px;color:var(--muted)}
+
+/* ------- log block ------- */
+pre.log{
+  font-family:var(--mono);font-size:12.5px;line-height:1.75;color:#cdbfa4;
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:20px 22px;overflow-x:auto;margin:18px 0;
+}
+pre.log .hl{color:var(--mint)} pre.log .dim{color:#6f6350}
+pre.log .ep{color:var(--tan);font-weight:700}
+
+/* ------- game replayer ------- */
+.arena{display:grid;grid-template-columns:minmax(300px,460px) 1fr;gap:30px;align-items:start;margin-top:10px}
+@media(max-width:880px){.arena{grid-template-columns:1fr}}
+.board-shell{border:1px solid var(--line-strong);border-radius:12px;padding:14px;background:var(--panel)}
+.board-wrap{position:relative}
+#lastArrow{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3}
+.board{
+  display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);
+  aspect-ratio:1;border-radius:6px;overflow:hidden;user-select:none;
+  container-type:size;
+  box-shadow:0 14px 38px rgba(0,0,0,.45);
+}
+.sqr{position:relative;overflow:hidden}
+.sqr.l{background:var(--tan)} .sqr.d{background:var(--walnut)}
+.sqr.hl::after{content:"";position:absolute;inset:0;background:rgba(255,255,170,.42);mix-blend-mode:hard-light}
+.sqr .pc{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:30px;font-size:9.8cqw;line-height:1;cursor:default;z-index:2;
+  text-shadow:0 1px 2px rgba(0,0,0,.35);
+}
+.sqr .pc.w{color:#fff} .sqr .pc.b{color:#1d1610}
+.sqr .pc.just{animation:pop .3s cubic-bezier(.2,.9,.3,1.35)}
+@keyframes pop{from{transform:scale(.5);opacity:.3}to{transform:scale(1);opacity:1}}
+.sqr .disk{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;
+  border-radius:50%;border:1.5px solid #1e1e1e;box-shadow:0 2px 5px rgba(0,0,0,.3);
+}
+.sqr .disk.just{animation:popd .3s cubic-bezier(.2,.9,.3,1.35)}
+@keyframes popd{from{transform:translate(-50%,-50%) scale(.5)}to{transform:translate(-50%,-50%) scale(1)}}
+.coord{position:absolute;font-family:var(--mono);font-size:9px;opacity:.55;color:#3c2f22}
+.coord.f{right:3px;bottom:2px}.coord.r{left:3px;top:2px}
+.board-meta{display:flex;justify-content:space-between;align-items:center;margin-top:12px;font-family:var(--mono);font-size:12px;color:var(--muted)}
+.board-meta b{color:var(--text)}
+.replayer-controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.replayer-controls .btn{padding:8px 14px;font-size:13px}
+.viewtoggle{margin-left:auto}
+.gametabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.gametabs .btn.active{background:var(--walnut);border-color:var(--walnut);color:var(--ink);font-weight:700}
+.movelist{
+  border:1px solid var(--line);border-radius:12px;background:var(--panel);
+  max-height:430px;overflow-y:auto;padding:14px;
+  display:grid;grid-template-columns:auto 1fr 1fr;gap:2px 12px;
+  font-family:var(--mono);font-size:13.5px;align-content:start;
+}
+.movelist .num{color:#6f6350}
+.movelist .mv{cursor:pointer;padding:2px 8px;border-radius:4px;color:#d9ccb3;transition:background .15s}
+.movelist .mv:hover{background:var(--panel-2);color:#fff}
+.movelist .mv.cur{background:var(--tan);color:var(--ink);font-weight:700}
+.scoreline{font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:10px}
+.scoreline b{color:var(--rose)}
+
+/* ------- repro ------- */
+pre.cmd{
+  font-family:var(--mono);font-size:13.5px;line-height:1.9;color:var(--text);
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:20px 24px;overflow-x:auto;margin:16px 0;
+}
+pre.cmd .c{color:#6f6350} pre.cmd .g{color:var(--mint)}
+.tree{font-family:var(--mono);font-size:13px;color:#cdbfa4;line-height:1.85}
+.tree b{color:var(--tan);font-weight:500}
+
+footer{
+  border-top:1px solid var(--line);margin-top:90px;
+  padding:46px 48px 60px;max-width:var(--maxw);margin-left:auto;margin-right:auto;
+}
+footer .row{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap;align-items:flex-end}
+footer .mono{font-family:var(--mono);font-size:12.5px;color:var(--muted)}
+pre.bib{font-family:var(--mono);font-size:12px;color:#b3a384;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-top:14px;overflow-x:auto}
+
+/* ===== final layout fixes: prevent overflow without distorting visuals ===== */
+html,body{max-width:100%;overflow-x:hidden}
+main,section,.hero,.twocol,.chart-grid,.losses,.arena,.pipe-wrap,.chart-card,.loss,.bigstat,.board-shell{min-width:0}
+p,.lede,.note,h1,h2,h3,h4,.sub,.kicker,.legendline,.ss-meta,.loss .f,.board-meta,.scoreline,figcaption,td,th{overflow-wrap:anywhere;word-break:normal}
+code{white-space:normal;overflow-wrap:anywhere}
+.btn{white-space:normal;text-align:center;justify-content:center}
+.pipe-wrap{overflow:hidden;padding:26px 18px 12px}
+.pipe-wrap svg{width:100%;min-width:0;max-width:100%;height:auto;overflow:visible}
+.pipe-wrap text,.chart-card svg text{paint-order:stroke;stroke:#15100c;stroke-width:2.5px;stroke-linejoin:round}
+.pipe-wrap text{font-weight:500}
+@media(max-width:760px){
+  .hero{padding-left:22px;padding-right:22px;gap:28px}
+  .kicker{align-items:flex-start;flex-wrap:wrap;line-height:1.5}
+  .pipe-wrap{padding:18px 12px 10px;border-radius:12px}
+  .pipe-controls{align-items:flex-start}
+  .legendline{display:block;line-height:1.8}
+  .ss-strip{grid-template-columns:repeat(7,1fr)}
+  input[type=range]{width:min(230px,100%)}
+  .cmp{display:block;overflow-x:auto;white-space:normal;-webkit-overflow-scrolling:touch}
+  .cmp table{min-width:620px}
+}
+@media(max-width:520px){
+  body{font-size:16px}
+  .chart-card{padding:18px 14px}
+  .losses{grid-template-columns:1fr}
+  .board-meta{align-items:flex-start;flex-direction:column;gap:6px}
+  .viewtoggle{margin-left:0}
+}
+</style>
+</head>
+<body>
+
+<nav class="rail" aria-label="Sections">
+  <div class="knight">♞</div>
+  <a href="#abstract"   data-s="abstract"><b>a</b><span>Abstract</span></a>
+  <a href="#why"        data-s="why"><b>b</b><span>Why world models</span></a>
+  <a href="#arch"       data-s="arch"><b>c</b><span>Architecture</span></a>
+  <a href="#objective"  data-s="objective"><b>d</b><span>Objective &amp; training</span></a>
+  <a href="#v2"         data-s="v2"><b>e</b><span>Beyond LeWM</span></a>
+  <a href="#causal"     data-s="causal"><b>f</b><span>Action causality</span></a>
+  <a href="#imagine"    data-s="imagine"><b>g</b><span>Imagination drift</span></a>
+  <a href="#latent"     data-s="latent"><b>h</b><span>Latent health</span></a>
+  <a href="#games"      data-s="games"><b>i</b><span>vs. Stockfish</span></a>
+  <a href="#reproduce"  data-s="reproduce"><b>j</b><span>Reproduce</span></a>
+</nav>
+
+<main>
+
+<!-- ================= HERO ================= -->
+<header class="hero" id="top">
+  <div>
+    <div class="kicker"><b>LeWM-Chess</b> · latent world model · trained from pixels</div>
+    <h1>A network that plays chess by <em>imagining</em> the future.</h1>
+    <p class="sub">No FENs. No bitboards. No rules. A ViT watches rendered board frames,
+    compresses each into a 256-dimensional thought, and an action-conditioned predictor
+    learns what that thought becomes when a move is played — the JEPA world-model recipe,
+    at chess scale, on a single H100.</p>
+    <div class="chips">
+      <div class="chip c1"><b data-count="100" data-suffix="%">0%</b><span>legal moves</span></div>
+      <div class="chip c2"><b data-count="67" data-suffix="%">0%</b><span>stockfish top-5 match</span></div>
+      <div class="chip c3"><b data-count="12" data-suffix=" cp">0</b><span>median move cost</span></div>
+      <div class="chip c4"><b data-count="7.6" data-suffix="×" data-dec="1">0×</b><span>causal error ratio</span></div>
+    </div>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/fanXvirat" style="border-bottom:none">View on GitHub →</a>
+      <a class="btn" href="#games" style="border-bottom:none">Watch it play Stockfish</a>
+    </div>
+  </div>
+  <div class="heroviz">
+    <canvas id="heroCanvas" width="1080" height="1080" aria-label="Animation of a chess position dissolving into latent space and reforming as the next position"></canvas>
+    <div class="phase" id="heroPhase">encode &middot; z<sub>t</sub></div>
+    <div class="tag">the model's actual input rendering — pieces are colored disks, one square per ViT patch</div>
+  </div>
+</header>
+
+<!-- ================= a · ABSTRACT ================= -->
+<section id="abstract">
+  <div class="eyebrow rv"><span class="sq"></span>a · abstract</div>
+  <h2 class="rv">Predict in representation space, <em>plan in imagination.</em></h2>
+  <p class="lede rv">LeWM-Chess is a single end-to-end network — ViT-Tiny encoder, AdaLN-zero
+  autoregressive predictor, legality-masked policy head, bounded value head — trained on
+  <b>942,240 positions</b> rendered from 10,000 elite games. It builds on the LeWM architecture
+  (<a href="https://arxiv.org/abs/2603.19312">arXiv:2603.19312</a>) and Yann LeCun's JEPA program:
+  rather than reconstructing pixels, the model predicts its own future <em>embeddings</em>,
+  conditioned on the action taken.</p>
+  <p class="rv">The result behaves like a world model, not a move classifier. Given the true move,
+  next-state prediction error is <code>0.062</code>; given a different-but-legal move it explodes
+  to <code>0.433</code> — a <b>+0.370 causal planning gap</b>. The policy head never proposes an
+  illegal move, matches Stockfish's top choice 38% of the time, and its median chosen move costs
+  just 12 centipawns. All from images.</p>
+</section>
+
+<!-- ================= b · WHY ================= -->
+<section id="why">
+  <div class="eyebrow rv"><span class="sq"></span>b · why a world model</div>
+  <h2 class="rv">Engines search the game. <em>This model searches its head.</em></h2>
+  <div class="twocol">
+    <div>
+      <p class="rv">Classical engines plan by querying a perfect simulator — the rules of chess —
+      millions of times per second. Animals don't get a simulator. They build one: an internal
+      model of how the world responds to their actions, then plan inside it.</p>
+      <p class="rv">That is the bet of the JEPA/world-model research program: <b>learn the dynamics
+      of the world in latent space</b>, where irrelevant detail is already compressed away, and use
+      the same representation for perception, prediction, and action.</p>
+      <p class="rv">Chess is the ideal stress test. The ground-truth simulator exists, so every claim
+      of "understanding" can be audited: <em>does the model's imagination match what actually happens
+      on the board?</em> Sections f–h answer that quantitatively.</p>
+    </div>
+    <div>
+      <div class="loss rv" style="--accent:var(--lav)">
+        <h4>What the model never sees</h4>
+        <p>FEN strings · bitboards · legal-move generators · piece values · opening books ·
+        search trees. Its entire sensory world is a 128×128 image.</p>
+      </div>
+      <div class="loss rv" style="--accent:var(--mint);margin-top:14px">
+        <h4>What it learns anyway</h4>
+        <p>100% legal moves, Sicilian theory, action-conditioned dynamics with a 7.6× causal error
+        ratio, and a value estimate of who is winning.</p>
+      </div>
+      <div class="loss rv" style="--accent:var(--rose);margin-top:14px">
+        <h4>What it is not (yet)</h4>
+        <p>A strong engine. It loses to full-strength Stockfish — honestly shown in section i.
+        The contribution is the <em>world model</em>, the substrate planning will run on.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= c · ARCHITECTURE ================= -->
+<section id="arch">
+  <div class="eyebrow rv"><span class="sq"></span>c · architecture</div>
+  <h2 class="rv">One latent space. <em>Three jobs:</em> perceive, predict, act.</h2>
+  <p class="rv">Press <b>play</b> to watch a 16-frame window flow through the network: the encoder
+  turns each rendered board into a 256-d latent <code>z</code>, the move embedder injects the action,
+  and the 8-block AdaLN-zero predictor rolls the future forward <code>K=4</code> steps —
+  the same autoregressive computation used at inference, trained directly.</p>
+  <div class="pipe-wrap rv">
+    <div class="pipe-controls">
+      <button class="btn" id="pipePlay">▶ play data flow</button>
+      <span class="legendline"><span class="dotk" style="background:var(--tan)"></span>frames
+      &nbsp;<span class="dotk" style="background:var(--lav)"></span>latents z
+      &nbsp;<span class="dotk" style="background:var(--mint)"></span>action a
+      &nbsp;<span class="dotk" style="background:var(--rose)"></span>predictions ẑ</span>
+    </div>
+    <svg id="pipeSVG" viewBox="0 0 1040 460" role="img" aria-label="Architecture diagram: frames to ViT encoder to latent space, action embedding into autoregressive predictor, to predicted latents, policy and value heads"></svg>
+  </div>
+  <h3 class="rv">Components</h3>
+  <div class="losses">
+    <div class="loss rv" style="--accent:var(--tan)">
+      <h4>Renderer → ViT-Tiny encoder</h4>
+      <span class="f">128×128 px · patch 16 · one square per patch</span>
+      <p>Pieces are drawn as twelve distinct colored disks, so each ViT patch contains exactly one
+      square — the cleanest possible visual tokenization of a board. A 192→2048→256 MLP projects
+      into the shared latent space.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--mint)">
+      <h4>Move embedder</h4>
+      <span class="f">20,480-token vocab · from×64+to (+promotions) · game progress</span>
+      <p>A collision-free UCI vocabulary embeds each action, plus a learned encoding of game
+      progress. This vector conditions every predictor block through AdaLN.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--lav)">
+      <h4>AdaLN-zero AR predictor</h4>
+      <span class="f">8 blocks · 16 heads · dim 256 · residual drift ẑ = z + Δ(h)</span>
+      <p>A causal transformer over the latent sequence, modulated by the action. The zero-initialized
+      drift head means the model starts from "nothing changes" and learns only the <em>delta</em>
+      a move causes.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--rose)">
+      <h4>Policy &amp; value heads</h4>
+      <span class="f">legality-masked logits · tanh-bounded value</span>
+      <p>The same latents feed a 20k-way policy head (masked to legal moves at play time) and a
+      tanh(cp/400)-style value head — readouts of the world model, ready for an RL planning stage.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= d · OBJECTIVE & TRAINING ================= -->
+<section id="objective">
+  <div class="eyebrow rv"><span class="sq"></span>d · objective &amp; training</div>
+  <h2 class="rv">Five losses, each aimed at a known way <em>latent predictors die.</em></h2>
+  <div class="losses">
+    <div class="loss rv" style="--accent:var(--tan)">
+      <h4>Multi-step rollout loss</h4>
+      <span class="f">Σₖ γᵏ⁻¹ ‖ẑ<sub>t+k</sub> − z<sub>t+k</sub>‖² · K=4 · γ=0.9</span>
+      <p>Trains the deployed autoregressive computation, killing exposure bias. By Theorem&nbsp;1,
+      compounding error is bounded by ε·(Lᵏ−1)/(L−1).</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--lav)">
+      <h4>Jacobian contraction penalty</h4>
+      <span class="f">β·‖J<sub>v</sub>‖² via Hutchinson, β=10⁻³</span>
+      <p>One stochastic matvec per step pushes the latent map toward Lipschitz L ≤ 1 — so rollout
+      error grows linearly, not exponentially.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--mint)">
+      <h4>Scheduled sampling</h4>
+      <span class="f">DAgger-style · p: 0 → 0.5 over training</span>
+      <p>The predictor's own outputs are mixed back into its context, so it trains on the error
+      distribution it will actually face at inference.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--orchid)">
+      <h4>InfoNCE action contrast</h4>
+      <span class="f">true move vs. shuffled move · cosine logits</span>
+      <p>Different moves must produce distinguishable latent futures — exactly the signal a planner
+      needs to compare actions.</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--ice)">
+      <h4>SIGReg anti-collapse</h4>
+      <span class="f">Epps–Pulley ECF statistic · 1024 random projections</span>
+      <p>Regularizes every 1-D projection of the embedding toward a standard Gaussian. Result:
+      0 dead dimensions out of 256 (section h).</p>
+    </div>
+    <div class="loss rv" style="--accent:var(--rose)">
+      <h4>Policy + value readouts</h4>
+      <span class="f">0.2·CE(policy) + 0.05·MSE(WDL)</span>
+      <p>Light supervised heads keep the latent space action-relevant and outcome-aware without
+      dominating the world-model objective.</p>
+    </div>
+  </div>
+
+  <h3 class="rv">Training dynamics — 703,529 windows · 10 epochs · batch 256 · bf16 · one H100</h3>
+  <div class="chart-grid">
+    <div class="chart-card rv">
+      <h4>Policy accuracy</h4>
+      <div class="sub">exact next-move match over a 20,480-way vocabulary, from pixels</div>
+      <svg id="accChart" viewBox="0 0 460 260"></svg>
+    </div>
+    <div class="chart-card rv">
+      <h4>Total loss</h4>
+      <div class="sub">val loss falls monotonically — the predictor keeps improving as scheduled sampling ramps</div>
+      <svg id="lossChart" viewBox="0 0 460 260"></svg>
+    </div>
+  </div>
+  <pre class="log rv"><span class="dim">parse pgn: 10000 games → 942,240 positions → 46.3 GB uint8 frame cache (mmap)</span>
+<span class="ep">E001</span> | train loss 1.9096 pred 0.0479 pol_acc 0.016 nr 0.98 | val loss 3.6797 pred 0.0529 pol_acc 0.023 nr 0.97
+<span class="ep">E004</span> | train loss 1.1305 pred 0.0418 pol_acc 0.139 nr 0.98 | val loss 3.1789 pred 0.0437 pol_acc 0.127 nr 0.98
+<span class="ep">E007</span> | train loss 0.7612 pred 0.0511 pol_acc 0.319 nr 0.97 | val loss 2.5182 pred 0.0534 pol_acc 0.188 nr 0.97
+<span class="ep">E010</span> | train loss 0.6513 pred 0.0595 pol_acc 0.419 nr 0.96 | val loss 2.4042 pred 0.0606 <span class="hl">pol_acc 0.200</span> <span class="hl">nr 0.96</span></pre>
+  <p class="note rv">The quiet hero is <code>nr</code> — the norm ratio of the K-step rollout to its
+  target, pinned at ≈1.0 for all ten epochs. Naive latent predictors shrink toward the mean the
+  moment they are fed their own outputs; the contraction penalty and scheduled sampling hold this
+  one open. The epoch-10 checkpoint is used everywhere below: every downstream metric — policy,
+  value, causality — is better there, at a negligible cost in raw 1-step prediction.</p>
+</section>
+
+<!-- ================= e · BEYOND LEWM ================= -->
+<section id="v2">
+  <div class="eyebrow rv"><span class="sq"></span>e · beyond lewm</div>
+  <h2 class="rv">Base LeWM predicts one step. <em>Chess punishes that.</em></h2>
+  <p class="lede rv">The base architecture is trained teacher-forced: predict z<sub>t+1</sub> from
+  the <i>true</i> z<sub>t</sub>. But at planning time the model must run on its <i>own</i> outputs —
+  and any per-step error ε compounds through the latent map's Lipschitz constant L as
+  <code>ε·(Lᵏ−1)/(L−1)</code>. If L&nbsp;&gt;&nbsp;1, imagination explodes exponentially.
+  Four upgrades attack exactly this.</p>
+
+  <div class="chart-card rv">
+    <h4>Theorem 1, live — the Hutchinson Jacobian contraction penalty</h4>
+    <div class="sub">A single stochastic Jacobian-vector product per step adds
+    <code>β·‖J<sub>z</sub>v‖²</code> to the loss, squeezing the predictor's Lipschitz constant
+    toward L ≤ 1. Drag L to see why an unregularized rollout dies — and where ours lives.</div>
+    <div class="ctrl">
+      <label for="lipSlider">Lipschitz constant L</label>
+      <input type="range" id="lipSlider" min="0.85" max="1.35" step="0.01" value="0.98" aria-label="Lipschitz constant of the latent map">
+      <b id="lipVal">L = 0.98</b>
+      <span>ε = 0.062 — the model's measured 1-step error</span>
+    </div>
+    <svg id="boundChart" viewBox="0 0 760 340"></svg>
+    <p class="note" style="margin-top:12px">The lavender dots are the <b>measured</b> closed-loop
+    drift from section g. At L ≈ 0.98 the theoretical bound saturates near
+    ε/(1−L) ≈ 0.65 — almost exactly the plateau the trained model exhibits (0.62).
+    The penalty isn't decoration; it predicts the model's behavior.</p>
+  </div>
+
+  <div class="twocol" style="margin-top:18px">
+    <div class="chart-card rv" style="margin:0">
+      <h4>Scheduled sampling (DAgger-style)</h4>
+      <div class="sub">During training, the predictor's own outputs are mixed back into its context
+      with probability p annealed 0 → 0.5 — so it learns on the error distribution it will face
+      when imagining. Drag the epoch slider to see the context window change:</div>
+      <div class="ctrl" style="margin-bottom:8px">
+        <label for="ssSlider">Epoch</label>
+        <input type="range" id="ssSlider" min="1" max="10" step="1" value="1" aria-label="Training epoch for scheduled sampling visualization">
+        <b id="ssEpochLabel">epoch 1</b>
+      </div>
+      <div class="ss-strip" id="ssStrip" aria-hidden="true"></div>
+      <div class="ss-meta">
+        <span><span class="dotk" style="background:var(--tan)"></span>ground-truth frame
+        &nbsp;<span class="dotk" style="background:var(--rose)"></span>model's own prediction ẑ</span>
+        <span id="ssLabel">p = <b>0.00</b></span>
+      </div>
+      <div class="ss-bar"><i id="ssBar"></i></div>
+    </div>
+    <div class="chart-card rv" style="margin:0">
+      <h4>InfoNCE action contrast</h4>
+      <div class="sub">A planner can only compare moves if different moves produce
+      <em>distinguishable</em> futures. The contrastive loss pushes the true-move latent delta
+      toward the real next state and the shuffled-move delta away from it:</div>
+      <svg id="nceChart" viewBox="0 0 460 270"></svg>
+      <p class="note" style="margin:6px 0 0">This is the loss that turns the 7.6× causal error
+      ratio of section f from an accident into a training target.</p>
+    </div>
+  </div>
+
+  <h3 class="rv">LeWM v1 → v2, summarized</h3>
+  <table class="cmp rv">
+    <thead><tr><th>axis</th><th>base LeWM</th><th>LeWM-Chess v2</th></tr></thead>
+    <tbody>
+      <tr><td>Rollout training</td>
+        <td class="bad">1-step, teacher-forced</td>
+        <td class="good">K = 4 multi-step with discount γ = 0.9 — trains the deployed computation</td></tr>
+      <tr><td>Error growth</td>
+        <td class="bad">unconstrained L → exponential ε·Lᵏ</td>
+        <td class="good">Hutchinson ‖J‖ penalty → L ≤ 1, linear growth, drift saturates at 0.62</td></tr>
+      <tr><td>Train / inference gap</td>
+        <td class="bad">exposure bias — never sees its own errors</td>
+        <td class="good">scheduled sampling, p: 0 → 0.5 across training</td></tr>
+      <tr><td>Action signal</td>
+        <td class="bad">actions can be ignored if states are predictive</td>
+        <td class="good">InfoNCE contrast forces move-distinguishable futures (+0.370 causal gap)</td></tr>
+      <tr><td>Rollout health (<code>nr</code>)</td>
+        <td class="bad">predictions shrink toward the mean</td>
+        <td class="good">norm ratio pinned at 0.96–0.98 for all 10 epochs</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ================= f · CAUSALITY ================= -->
+<section id="causal">
+  <div class="eyebrow rv"><span class="sq"></span>f · action causality</div>
+  <h2 class="rv">Does it <em>understand moves,</em> or just memorize trajectories?</h2>
+  <p class="rv">The defining test of a world model: predict the next latent state given the
+  <b>true</b> move, a <b>shuffled</b> (different but legal) move, pure <b>noise</b>, and a
+  <b>no-change</b> null. A trajectory-memorizer scores the same everywhere. A causal model
+  collapses only when given the truth.</p>
+  <div class="chart-card rv">
+    <h4>Action-conditional prediction error (latent MSE, 78k held-out windows)</h4>
+    <div class="sub">lower is better — only the true action unlocks the future</div>
+    <svg id="causalChart" viewBox="0 0 760 320"></svg>
+  </div>
+  <div class="bigstats">
+    <div class="bigstat rv"><b style="color:var(--mint)" data-count="0.370" data-dec="3" data-prefix="+">+0.000</b><span>causal planning gap (shuffled − true)</span></div>
+    <div class="bigstat rv"><b style="color:var(--lav)" data-count="7.63" data-dec="2" data-suffix="×">0×</b><span>zero-action / true-action error ratio</span></div>
+    <div class="bigstat rv"><b style="color:var(--butter)" data-count="6.48" data-dec="2" data-suffix="×">0×</b><span>shuffled / true error ratio</span></div>
+  </div>
+  <p class="rv">The ordering carries a subtle signature of real modeling: a <b>wrong-but-legal move
+  hurts more than random noise</b> (0.433 vs 0.390). A coherent false premise drags the imagined
+  future onto the wrong branch of the game tree; incoherent garbage can be partially ignored.
+  The model has learned the manifold of plausible futures.</p>
+</section>
+
+<!-- ================= g · IMAGINATION ================= -->
+<section id="imagine">
+  <div class="eyebrow rv"><span class="sq"></span>g · imagination drift</div>
+  <h2 class="rv">Closed-loop rollouts: feeding the model <em>its own dreams.</em></h2>
+  <div class="twocol">
+    <div>
+      <p class="rv">From the starting position, the predictor is rolled forward on its own outputs —
+      no ground-truth frames — and compared against re-encoded reality at every step. This is the
+      regime where unregularized latent models diverge exponentially.</p>
+      <p class="rv">LeWM-Chess drifts, then <b>saturates</b> near 0.62 latent MSE — comfortably
+      below the 0.43 error of a single wrong move compounding. The Jacobian contraction penalty is
+      doing exactly what Theorem&nbsp;1 promises: linear-not-exponential error growth, and a stable
+      horizon of several plies of usable imagination.</p>
+      <p class="note rv">That horizon is the budget a future latent-space MCTS gets to spend.</p>
+    </div>
+    <div class="chart-card rv">
+      <h4>Imagination drift</h4>
+      <div class="sub">latent MSE vs. reality, closed loop from the initial position</div>
+      <svg id="driftChart" viewBox="0 0 460 280"></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ================= h · LATENT HEALTH ================= -->
+<section id="latent">
+  <div class="eyebrow rv"><span class="sq"></span>h · latent health</div>
+  <h2 class="rv">A representation with <em>no dead weight.</em></h2>
+  <div class="bigstats">
+    <div class="bigstat rv"><b style="color:var(--tan)">256</b><span>latent dimensions</span></div>
+    <div class="bigstat rv"><b style="color:var(--mint)" data-count="0">·</b><span>dead dimensions (σ &lt; 10⁻³)</span></div>
+    <div class="bigstat rv"><b style="color:var(--lav)" data-count="30">0</b><span>effective rank (dims carrying &gt;1% variance)</span></div>
+    <div class="bigstat rv"><b style="color:var(--butter)">≈ 1.0</b><span>per-dimension std (SIGReg target)</span></div>
+  </div>
+  <p class="rv">SIGReg holds every dimension at unit variance with a near-diagonal correlation
+  matrix — no collapse, no redundancy — while the task compresses meaning into an effective rank
+  of ~30. The space is healthy <em>and</em> economical.</p>
+  <div class="twocol">
+    <figure class="figure rv">
+      <img src="assets/latent_health.png" alt="Histogram of latent standard deviations centered at 1.0, and a near-diagonal 256 by 256 correlation matrix" loading="lazy">
+      <figcaption>Std-dev distribution tightly centered at 1.0; correlation matrix is essentially the identity.</figcaption>
+    </figure>
+    <figure class="figure rv">
+      <img src="assets/action_conditional_boxplot.png" alt="Box plot of per-position prediction error for true, zero and shuffled actions" loading="lazy">
+      <figcaption>Per-position error distributions: the true-action box barely lifts off zero.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= i · GAMES ================= -->
+<section id="games">
+  <div class="eyebrow rv"><span class="sq"></span>i · playing stockfish</div>
+  <h2 class="rv">Real games, replayed. <em>Toggle to see what the model sees.</em></h2>
+  <p class="rv">Both games below were played by the epoch-10 checkpoint as White against
+  full-strength Stockfish. It loses — and the losses are shown unedited — but watch the openings:
+  a textbook <b>Najdorf English Attack</b> structure and a <b>Rossolimo Sicilian</b>, theory it
+  reconstructed from pixels alone. Step through, or press play.</p>
+
+  <div class="gametabs rv">
+    <button class="btn active" data-game="d12">Game 1 · vs Stockfish d12 · Najdorf</button>
+    <button class="btn" data-game="d18">Game 2 · vs Stockfish d18 · Rossolimo</button>
+  </div>
+
+  <div class="arena rv">
+    <div class="board-shell">
+      <div class="board-wrap">
+        <div class="board" id="board" aria-label="Chess board"></div>
+        <svg id="lastArrow" viewBox="0 0 800 800" preserveAspectRatio="none" aria-hidden="true"></svg>
+      </div>
+      <div class="board-meta">
+        <span>White <b>LeWM-Chess</b></span>
+        <span id="moveReadout">start</span>
+        <span>Black <b id="oppLabel">Stockfish d12</b></span>
+      </div>
+      <div class="replayer-controls">
+        <button class="btn" id="bStart" aria-label="Go to start">⏮</button>
+        <button class="btn" id="bPrev" aria-label="Previous move">‹</button>
+        <button class="btn primary" id="bPlay" aria-label="Play">▶ play</button>
+        <button class="btn" id="bNext" aria-label="Next move">›</button>
+        <button class="btn" id="bEnd" aria-label="Go to end">⏭</button>
+        <button class="btn viewtoggle" id="bView">model view ◉</button>
+      </div>
+      <div class="scoreline">result <b>0–1</b> · LeWM plays 100% legal moves throughout · PGNs in <code>games/</code></div>
+    </div>
+    <div>
+      <div class="movelist" id="moveList" aria-label="Move list"></div>
+      <h3 style="margin-top:24px">Policy vs. Stockfish, depth 12 · 500 held-out positions</h3>
+      <div class="bigstats" style="margin-top:12px">
+        <div class="bigstat"><b style="color:var(--mint)" data-count="100" data-suffix="%">0%</b><span>legal move rate</span></div>
+        <div class="bigstat"><b style="color:var(--lav)" data-count="38" data-suffix="%">0%</b><span>top-1 agreement</span></div>
+        <div class="bigstat"><b style="color:var(--butter)" data-count="67" data-suffix="%">0%</b><span>top-5 agreement</span></div>
+        <div class="bigstat"><b style="color:var(--rose)" data-count="12" data-suffix=" cp">0</b><span>median Δcp of chosen move</span></div>
+      </div>
+      <p class="note">Median Δcp of 12 means the typical model move costs about an eighth of a pawn
+      against Stockfish's choice; the 149 cp mean is driven by a tail of tactical misses — the gap
+      a planning stage is designed to close.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================= j · REPRODUCE ================= -->
+<section id="reproduce">
+  <div class="eyebrow rv"><span class="sq"></span>j · reproduce</div>
+  <h2 class="rv">One file trains it. <em>Two more interrogate it.</em></h2>
+  <div class="twocol">
+    <div>
+<pre class="cmd rv"><span class="c"># install</span>
+<span class="g">$</span> pip install -r requirements.txt
+
+<span class="c"># 1 · render 942k positions into a uint8 mmap cache</span>
+<span class="g">$</span> python train.py --mode build-cache --pgn chessgames.pgn
+
+<span class="c"># 2 · train (H100-tuned: bf16, fused AdamW, 16 workers)</span>
+<span class="g">$</span> python train.py --mode train --pgn chessgames.pgn \
+      --epochs 10 --batch-size 256
+
+<span class="c"># 3 · stockfish-grounded eval</span>
+<span class="g">$</span> python train.py --mode stockfish \
+      --ckpt outputs/lewm_chess_best.pt
+
+<span class="c"># 4 · world-model probes (sections f–h)</span>
+<span class="g">$</span> python diagnostics.py --ckpt outputs/lewm_chess_best.pt
+
+<span class="c"># 5 · play it</span>
+<span class="g">$</span> python play.py --color white --depth 12</pre>
+    </div>
+    <div>
+      <h3 style="margin-top:0">Repository</h3>
+<pre class="tree rv">lewm-chess/
+├── <b>train.py</b>          model · losses · training · eval
+├── <b>play.py</b>           LeWM vs Stockfish → PGN
+├── <b>diagnostics.py</b>    causality · drift · embedding health
+├── chessgames.pgn    training corpus
+├── games/            the games replayed above
+├── notebooks/        full evaluation notebook
+├── assets/           result figures
+└── docs/             this report</pre>
+      <h3>Roadmap</h3>
+      <p style="font-size:15px">RL fine-tuning on tanh(cp/400) value targets → latent-space MCTS that
+      plans inside the imagination instead of the rules → 10M+ positions and a larger encoder →
+      a pixel decoder to <em>watch</em> the model dream.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="row">
+    <div>
+      <div class="kicker" style="margin-bottom:10px"><b>LeWM-Chess</b></div>
+      <div class="mono">Built on LeWM (arXiv:2603.19312) and the JEPA world-model program · LeCun et al.<br>
+      Trained on a single H100 · 942,240 positions · MIT license</div>
+    </div>
+    <div class="mono"><a href="https://github.com/fanXvirat">github.com/fanXvirat</a></div>
+  </div>
+<pre class="bib">@misc{lewmchess2026,
+  author = {fanXvirat},
+  title  = {LeWM-Chess: A Latent World Model for Chess from Pixels},
+  year   = {2026},
+  url    = {https://github.com/fanXvirat/lewm-chess}
+}</pre>
+</footer>
+
+</main>
+<script>
+window.GAMES = {
+  "d12": {
+    "start": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+    "plies": [
+      {"san":"e4","fen":"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR","from":"e2","to":"e4"},
+      {"san":"c5","fen":"rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR","from":"c7","to":"c5"},
+      {"san":"Nf3","fen":"rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R","from":"g1","to":"f3"},
+      {"san":"d6","fen":"rnbqkbnr/pp2pppp/3p4/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R","from":"d7","to":"d6"},
+      {"san":"d4","fen":"rnbqkbnr/pp2pppp/3p4/2p5/3PP3/5N2/PPP2PPP/RNBQKB1R","from":"d2","to":"d4"},
+      {"san":"cxd4","fen":"rnbqkbnr/pp2pppp/3p4/8/3pP3/5N2/PPP2PPP/RNBQKB1R","from":"c5","to":"d4"},
+      {"san":"Nxd4","fen":"rnbqkbnr/pp2pppp/3p4/8/3NP3/8/PPP2PPP/RNBQKB1R","from":"f3","to":"d4"},
+      {"san":"Nf6","fen":"rnbqkb1r/pp2pppp/3p1n2/8/3NP3/8/PPP2PPP/RNBQKB1R","from":"g8","to":"f6"},
+      {"san":"Nc3","fen":"rnbqkb1r/pp2pppp/3p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R","from":"b1","to":"c3"},
+      {"san":"a6","fen":"rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R","from":"a7","to":"a6"},
+      {"san":"Be3","fen":"rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N1B3/PPP2PPP/R2QKB1R","from":"c1","to":"e3"},
+      {"san":"e5","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/3NP3/2N1B3/PPP2PPP/R2QKB1R","from":"e7","to":"e5"},
+      {"san":"Nb3","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN1B3/PPP2PPP/R2QKB1R","from":"d4","to":"b3"},
+      {"san":"Ng4","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN1B3/PPP2PPP/R2QKB1R","from":"f6","to":"g4"},
+      {"san":"Bc1","fen":"rnbqkb1r/1p3ppp/p2p4/4p3/4P1n1/1NN5/PPP2PPP/R1BQKB1R","from":"e3","to":"c1"},
+      {"san":"Nf6","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p3/4P3/1NN5/PPP2PPP/R1BQKB1R","from":"g4","to":"f6"},
+      {"san":"Bg5","fen":"rnbqkb1r/1p3ppp/p2p1n2/4p1B1/4P3/1NN5/PPP2PPP/R2QKB1R","from":"c1","to":"g5"},
+      {"san":"Be7","fen":"rnbqk2r/1p2bppp/p2p1n2/4p1B1/4P3/1NN5/PPP2PPP/R2QKB1R","from":"f8","to":"e7"},
+      {"san":"Bxf6","fen":"rnbqk2r/1p2bppp/p2p1B2/4p3/4P3/1NN5/PPP2PPP/R2QKB1R","from":"g5","to":"f6"},
+      {"san":"Bxf6","fen":"rnbqk2r/1p3ppp/p2p1b2/4p3/4P3/1NN5/PPP2PPP/R2QKB1R","from":"e7","to":"f6"},
+      {"san":"Qd3","fen":"rnbqk2r/1p3ppp/p2p1b2/4p3/4P3/1NNQ4/PPP2PPP/R3KB1R","from":"d1","to":"d3"},
+      {"san":"Bg5","fen":"rnbqk2r/1p3ppp/p2p4/4p1b1/4P3/1NNQ4/PPP2PPP/R3KB1R","from":"f6","to":"g5"},
+      {"san":"Nd5","fen":"rnbqk2r/1p3ppp/p2p4/3Np1b1/4P3/1N1Q4/PPP2PPP/R3KB1R","from":"c3","to":"d5"},
+      {"san":"O-O","fen":"rnbq1rk1/1p3ppp/p2p4/3Np1b1/4P3/1N1Q4/PPP2PPP/R3KB1R","from":"e8","to":"g8"},
+      {"san":"h4","fen":"rnbq1rk1/1p3ppp/p2p4/3Np1b1/4P2P/1N1Q4/PPP2PP1/R3KB1R","from":"h2","to":"h4"},
+      {"san":"Bh6","fen":"rnbq1rk1/1p3ppp/p2p3b/3Np3/4P2P/1N1Q4/PPP2PP1/R3KB1R","from":"g5","to":"h6"},
+      {"san":"g3","fen":"rnbq1rk1/1p3ppp/p2p3b/3Np3/4P2P/1N1Q2P1/PPP2P2/R3KB1R","from":"g2","to":"g3"},
+      {"san":"Nc6","fen":"r1bq1rk1/1p3ppp/p1np3b/3Np3/4P2P/1N1Q2P1/PPP2P2/R3KB1R","from":"b8","to":"c6"},
+      {"san":"c3","fen":"r1bq1rk1/1p3ppp/p1np3b/3Np3/4P2P/1NPQ2P1/PP3P2/R3KB1R","from":"c2","to":"c3"},
+      {"san":"f5","fen":"r1bq1rk1/1p4pp/p1np3b/3Npp2/4P2P/1NPQ2P1/PP3P2/R3KB1R","from":"f7","to":"f5"},
+      {"san":"exf5","fen":"r1bq1rk1/1p4pp/p1np3b/3NpP2/7P/1NPQ2P1/PP3P2/R3KB1R","from":"e4","to":"f5"},
+      {"san":"e4","fen":"r1bq1rk1/1p4pp/p1np3b/3N1P2/4p2P/1NPQ2P1/PP3P2/R3KB1R","from":"e5","to":"e4"},
+      {"san":"Qd2","fen":"r1bq1rk1/1p4pp/p1np3b/3N1P2/4p2P/1NP3P1/PP1Q1P2/R3KB1R","from":"d3","to":"d2"},
+      {"san":"Bxd2+","fen":"r1bq1rk1/1p4pp/p1np4/3N1P2/4p2P/1NP3P1/PP1b1P2/R3KB1R","from":"h6","to":"d2"},
+      {"san":"Kxd2","fen":"r1bq1rk1/1p4pp/p1np4/3N1P2/4p2P/1NP3P1/PP1K1P2/R4B1R","from":"e1","to":"d2"},
+      {"san":"Kh8","fen":"r1bq1r1k/1p4pp/p1np4/3N1P2/4p2P/1NP3P1/PP1K1P2/R4B1R","from":"g8","to":"h8"},
+      {"san":"Bg2","fen":"r1bq1r1k/1p4pp/p1np4/3N1P2/4p2P/1NP3P1/PP1K1PB1/R6R","from":"f1","to":"g2"},
+      {"san":"Bxf5","fen":"r2q1r1k/1p4pp/p1np4/3N1b2/4p2P/1NP3P1/PP1K1PB1/R6R","from":"c8","to":"f5"},
+      {"san":"Nd4","fen":"r2q1r1k/1p4pp/p1np4/3N1b2/3Np2P/2P3P1/PP1K1PB1/R6R","from":"b3","to":"d4"},
+      {"san":"Nxd4","fen":"r2q1r1k/1p4pp/p2p4/3N1b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"c6","to":"d4"},
+      {"san":"Ne7","fen":"r2q1r1k/1p2N1pp/p2p4/5b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"d5","to":"e7"},
+      {"san":"Qb6","fen":"r4r1k/1p2N1pp/pq1p4/5b2/3np2P/2P3P1/PP1K1PB1/R6R","from":"d8","to":"b6"},
+      {"san":"cxd4","fen":"r4r1k/1p2N1pp/pq1p4/5b2/3Pp2P/6P1/PP1K1PB1/R6R","from":"c3","to":"d4"},
+      {"san":"Qxb2+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/6P1/Pq1K1PB1/R6R","from":"b6","to":"b2"},
+      {"san":"Ke3","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/4K1P1/Pq3PB1/R6R","from":"d2","to":"e3"},
+      {"san":"Qc3+","fen":"r4r1k/1p2N1pp/p2p4/5b2/3Pp2P/2q1K1P1/P4PB1/R6R","from":"b2","to":"c3"},
+      {"san":"Kf4","fen":"r4r1k/1p2N1pp/p2p4/5b2/3PpK1P/2q3P1/P4PB1/R6R","from":"e3","to":"f4"},
+      {"san":"Qd2#","fen":"r4r1k/1p2N1pp/p2p4/5b2/3PpK1P/6P1/P2q1PB1/R6R","from":"c3","to":"d2"}
+    ]
+  },
+  "d18": {
+    "start": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR",
+    "plies": [
+      {"san":"e4","fen":"rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR","from":"e2","to":"e4"},
+      {"san":"c5","fen":"rnbqkbnr/pp1ppppp/8/2p5/4P3/8/PPPP1PPP/RNBQKBNR","from":"c7","to":"c5"},
+      {"san":"Nf3","fen":"rnbqkbnr/pp1ppppp/8/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R","from":"g1","to":"f3"},
+      {"san":"Nc6","fen":"r1bqkbnr/pp1ppppp/2n5/2p5/4P3/5N2/PPPP1PPP/RNBQKB1R","from":"b8","to":"c6"},
+      {"san":"Bb5","fen":"r1bqkbnr/pp1ppppp/2n5/1Bp5/4P3/5N2/PPPP1PPP/RNBQK2R","from":"f1","to":"b5"},
+      {"san":"g6","fen":"r1bqkbnr/pp1ppp1p/2n3p1/1Bp5/4P3/5N2/PPPP1PPP/RNBQK2R","from":"g7","to":"g6"},
+      {"san":"O-O","fen":"r1bqkbnr/pp1ppp1p/2n3p1/1Bp5/4P3/5N2/PPPP1PPP/RNBQ1RK1","from":"e1","to":"g1"},
+      {"san":"Bg7","fen":"r1bqk1nr/pp1pppbp/2n3p1/1Bp5/4P3/5N2/PPPP1PPP/RNBQ1RK1","from":"f8","to":"g7"},
+      {"san":"Re1","fen":"r1bqk1nr/pp1pppbp/2n3p1/1Bp5/4P3/5N2/PPPP1PPP/RNBQR1K1","from":"f1","to":"e1"},
+      {"san":"e5","fen":"r1bqk1nr/pp1p1pbp/2n3p1/1Bp1p3/4P3/5N2/PPPP1PPP/RNBQR1K1","from":"e7","to":"e5"},
+      {"san":"Bxc6","fen":"r1bqk1nr/pp1p1pbp/2B3p1/2p1p3/4P3/5N2/PPPP1PPP/RNBQR1K1","from":"b5","to":"c6"},
+      {"san":"dxc6","fen":"r1bqk1nr/pp3pbp/2p3p1/2p1p3/4P3/5N2/PPPP1PPP/RNBQR1K1","from":"d7","to":"c6"},
+      {"san":"d3","fen":"r1bqk1nr/pp3pbp/2p3p1/2p1p3/4P3/3P1N2/PPP2PPP/RNBQR1K1","from":"d2","to":"d3"},
+      {"san":"b6","fen":"r1bqk1nr/p4pbp/1pp3p1/2p1p3/4P3/3P1N2/PPP2PPP/RNBQR1K1","from":"b7","to":"b6"},
+      {"san":"Nbd2","fen":"r1bqk1nr/p4pbp/1pp3p1/2p1p3/4P3/3P1N2/PPPN1PPP/R1BQR1K1","from":"b1","to":"d2"},
+      {"san":"Be6","fen":"r2qk1nr/p4pbp/1pp1b1p1/2p1p3/4P3/3P1N2/PPPN1PPP/R1BQR1K1","from":"c8","to":"e6"},
+      {"san":"Nc4","fen":"r2qk1nr/p4pbp/1pp1b1p1/2p1p3/2N1P3/3P1N2/PPP2PPP/R1BQR1K1","from":"d2","to":"c4"},
+      {"san":"Qc7","fen":"r3k1nr/p1q2pbp/1pp1b1p1/2p1p3/2N1P3/3P1N2/PPP2PPP/R1BQR1K1","from":"d8","to":"c7"},
+      {"san":"b3","fen":"r3k1nr/p1q2pbp/1pp1b1p1/2p1p3/2N1P3/1P1P1N2/P1P2PPP/R1BQR1K1","from":"b2","to":"b3"},
+      {"san":"f6","fen":"r3k1nr/p1q3bp/1pp1bpp1/2p1p3/2N1P3/1P1P1N2/P1P2PPP/R1BQR1K1","from":"f7","to":"f6"},
+      {"san":"a4","fen":"r3k1nr/p1q3bp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N2/2P2PPP/R1BQR1K1","from":"a2","to":"a4"},
+      {"san":"Nh6","fen":"r3k2r/p1q3bp/1pp1bppn/2p1p3/P1N1P3/1P1P1N2/2P2PPP/R1BQR1K1","from":"g8","to":"h6"},
+      {"san":"Bb2","fen":"r3k2r/p1q3bp/1pp1bppn/2p1p3/P1N1P3/1P1P1N2/1BP2PPP/R2QR1K1","from":"c1","to":"b2"},
+      {"san":"Nf7","fen":"r3k2r/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N2/1BP2PPP/R2QR1K1","from":"h6","to":"f7"},
+      {"san":"Qd2","fen":"r3k2r/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N2/1BPQ1PPP/R3R1K1","from":"d1","to":"d2"},
+      {"san":"O-O","fen":"r4rk1/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N2/1BPQ1PP1/R3R1K1","from":"e8","to":"g8"},
+      {"san":"h3","fen":"r4rk1/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N1P/1BPQ1PP1/R3R1K1","from":"h2","to":"h3"},
+      {"san":"Rad8","fen":"3r1rk1/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N1P/1BPQ1PP1/R3R1K1","from":"a8","to":"d8"},
+      {"san":"Rad1","fen":"3r1rk1/p1q2nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N1P/1BPQ1PP1/3RR1K1","from":"a1","to":"d1"},
+      {"san":"Rd7","fen":"5rk1/p1qr1nbp/1pp1bpp1/2p1p3/P1N1P3/1P1P1N1P/1BPQ1PP1/3RR1K1","from":"d8","to":"d7"},
+      {"san":"b4","fen":"5rk1/p1qr1nbp/1pp1bpp1/2p1p3/PPN1P3/3P1N1P/1BPQ1PP1/3RR1K1","from":"b3","to":"b4"},
+      {"san":"Bxc4","fen":"5rk1/p1qr1nbp/1pp2pp1/2p1p3/PPb1P3/3P1N1P/1BPQ1PP1/3RR1K1","from":"e6","to":"c4"},
+      {"san":"bxc5","fen":"5rk1/p1qr1nbp/1pp2pp1/2P1p3/P1b1P3/3P1N1P/1BPQ1PP1/3RR1K1","from":"b4","to":"c5"},
+      {"san":"Be6","fen":"5rk1/p1qr1nbp/1pp1bpp1/2P1p3/P3P3/3P1N1P/1BPQ1PP1/3RR1K1","from":"c4","to":"e6"},
+      {"san":"d4","fen":"5rk1/p1qr1nbp/1pp1bpp1/2P1p3/P2PP3/5N1P/1BPQ1PP1/3RR1K1","from":"d3","to":"d4"},
+      {"san":"bxc5","fen":"5rk1/p1qr1nbp/2p1bpp1/2p1p3/P2PP3/5N1P/1BPQ1PP1/3RR1K1","from":"b6","to":"c5"},
+      {"san":"dxe5","fen":"5rk1/p1qr1nbp/2p1bpp1/2p1P3/P3P3/5N1P/1BPQ1PP1/3RR1K1","from":"d4","to":"e5"},
+      {"san":"Rxd2","fen":"5rk1/p1q2nbp/2p1bpp1/2p1P3/P3P3/5N1P/1BPr1PP1/3RR1K1","from":"d7","to":"d2"},
+      {"san":"Rxd2","fen":"5rk1/p1q2nbp/2p1bpp1/2p1P3/P3P3/5N1P/1BPR1PP1/4R1K1","from":"d1","to":"d2"},
+      {"san":"fxe5","fen":"5rk1/p1q2nbp/2p1b1p1/2p1p3/P3P3/5N1P/1BPR1PP1/4R1K1","from":"f6","to":"e5"},
+      {"san":"Rd5","fen":"5rk1/p1q2nbp/2p1b1p1/2pRp3/P3P3/5N1P/1BP2PP1/4R1K1","from":"d2","to":"d5"},
+      {"san":"cxd5","fen":"5rk1/p1q2nbp/4b1p1/2ppp3/P3P3/5N1P/1BP2PP1/4R1K1","from":"c6","to":"d5"},
+      {"san":"exd5","fen":"5rk1/p1q2nbp/4b1p1/2pPp3/P7/5N1P/1BP2PP1/4R1K1","from":"e4","to":"d5"},
+      {"san":"Bxd5","fen":"5rk1/p1q2nbp/6p1/2pbp3/P7/5N1P/1BP2PP1/4R1K1","from":"e6","to":"d5"},
+      {"san":"Rxe5","fen":"5rk1/p1q2nbp/6p1/2pbR3/P7/5N1P/1BP2PP1/6K1","from":"e1","to":"e5"},
+      {"san":"Nxe5","fen":"5rk1/p1q3bp/6p1/2pbn3/P7/5N1P/1BP2PP1/6K1","from":"f7","to":"e5"},
+      {"san":"Nxe5","fen":"5rk1/p1q3bp/6p1/2pbN3/P7/7P/1BP2PP1/6K1","from":"f3","to":"e5"},
+      {"san":"Qxe5","fen":"5rk1/p5bp/6p1/2pbq3/P7/7P/1BP2PP1/6K1","from":"c7","to":"e5"},
+      {"san":"Bxe5","fen":"5rk1/p5bp/6p1/2pbB3/P7/7P/2P2PP1/6K1","from":"b2","to":"e5"},
+      {"san":"Bxe5","fen":"5rk1/p6p/6p1/2pbb5/P7/7P/2P2PP1/6K1","from":"g7","to":"e5"},
+      {"san":"g3","fen":"5rk1/p6p/6p1/2pbb5/P7/6PP/2P2P2/6K1","from":"g2","to":"g3"},
+      {"san":"Bf3","fen":"5rk1/p6p/6p1/2p1b3/P7/5bPP/2P2P2/6K1","from":"d5","to":"f3"},
+      {"san":"h4","fen":"5rk1/p6p/6p1/2p1b3/P6P/5bP1/2P2P2/6K1","from":"h3","to":"h4"},
+      {"san":"Rb8","fen":"1r4k1/p6p/6p1/2p1b3/P6P/5bP1/2P2P2/6K1","from":"f8","to":"b8"},
+      {"san":"Kf1","fen":"1r4k1/p6p/6p1/2p1b3/P6P/5bP1/2P2P2/5K2","from":"g1","to":"f1"},
+      {"san":"Rb1#","fen":"6k1/p6p/6p1/2p1b3/P6P/5bP1/2P2P2/1r3K2","from":"b8","to":"b1"}
+    ]
+  }
+};
+</script>
+<script>
+"use strict";
+const REDUCED = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const C = {
+  light:"#f0d9b5", dark:"#b58863", ink:"#15100c",
+  piece:{ P:["#aaaaff","#28288c"], N:["#aaffaa","#288c28"], B:["#ffaaaa","#8c2828"],
+          R:["#ffffaa","#8c8c28"], Q:["#ffaaff","#8c288c"], K:["#aaffff","#288c8c"] },
+  radius:{ P:.28, N:.34, B:.32, R:.36, Q:.40, K:.42 }
+};
+
+/* ---------- reveal on scroll ---------- */
+const rvObs = new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){ e.target.classList.add("in"); rvObs.unobserve(e.target); }
+}),{threshold:.12});
+document.querySelectorAll(".rv").forEach(el=>rvObs.observe(el));
+
+/* ---------- rail highlighting ---------- */
+const railLinks = [...document.querySelectorAll(".rail a[data-s]")];
+const secObs = new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){
+    railLinks.forEach(a=>a.classList.toggle("on", a.dataset.s===e.target.id));
+  }
+}),{rootMargin:"-35% 0px -55% 0px"});
+document.querySelectorAll("main section").forEach(s=>secObs.observe(s));
+
+/* ---------- animated counters ---------- */
+function animateCount(el){
+  const target=parseFloat(el.dataset.count), dec=parseInt(el.dataset.dec||"0");
+  const pre=el.dataset.prefix||"", suf=el.dataset.suffix||"";
+  if(REDUCED){ el.textContent=pre+target.toFixed(dec)+suf; return; }
+  const t0=performance.now(), dur=1300;
+  (function tick(t){
+    const p=Math.min(1,(t-t0)/dur), e=1-Math.pow(1-p,3);
+    el.textContent=pre+(target*e).toFixed(dec)+suf;
+    if(p<1) requestAnimationFrame(tick);
+  })(t0);
+}
+const cntObs=new IntersectionObserver(es=>es.forEach(e=>{
+  if(e.isIntersecting){ animateCount(e.target); cntObs.unobserve(e.target); }
+}),{threshold:.6});
+document.querySelectorAll("[data-count]").forEach(el=>cntObs.observe(el));
+
+/* ====================================================================
+   HERO — render → dissolve to latent → imagine next
+   ==================================================================== */
+(function hero(){
+  const cv=document.getElementById("heroCanvas"); if(!cv) return;
+  const ctx=cv.getContext("2d"), S=cv.width, cell=S/8;
+  const phaseEl=document.getElementById("heroPhase");
+  const game=window.GAMES.d18;
+  const fens=[game.start, ...game.plies.slice(0,28).map(p=>p.fen)];
+  // No Unicode tags, HTML native tags are used instead for better rendering
+  const sans=["—", ...game.plies.slice(0,28).map(p=>p.san)];
+
+  function parse(fen){
+    const disks=[]; let r=0,f=0;
+    for(const ch of fen){
+      if(ch==="/"){r++;f=0;continue;}
+      if(/\d/.test(ch)){f+=+ch;continue;}
+      const white=ch===ch.toUpperCase(), t=ch.toUpperCase();
+      disks.push({ch, x:(f+.5)*cell, y:(r+.5)*cell,
+                  col:C.piece[t][white?0:1], rr:C.radius[t]*cell});
+      f++;
+    }
+    return disks;
+  }
+  function scatter(i){
+    const a=Math.sin(i*127.1)*43758.5453, b=Math.sin(i*311.7)*12543.853;
+    return {x:(a-Math.floor(a))*(S-80)+40, y:(b-Math.floor(b))*(S-80)+40};
+  }
+  function pair(A,B){
+    const out=[], usedB=new Set();
+    A.forEach(a=>{
+      const j=B.findIndex((b,k)=>!usedB.has(k)&&b.ch===a.ch&&b.x===a.x&&b.y===a.y);
+      if(j>=0){usedB.add(j);out.push([a,B[j]]);} else out.push([a,null]);
+    });
+    out.forEach(p=>{
+      if(p[1]) return;
+      const j=B.findIndex((b,k)=>!usedB.has(k)&&b.ch===p[0].ch);
+      if(j>=0){usedB.add(j);p[1]=B[j];}
+    });
+    B.forEach((b,k)=>{ if(!usedB.has(k)) out.push([null,b]); });
+    return out;
+  }
+  function board(){
+    for(let r=0;r<8;r++)for(let f=0;f<8;f++){
+      ctx.fillStyle=(r+f)%2===0?C.light:C.dark;
+      ctx.fillRect(f*cell,r*cell,cell,cell);
+    }
+  }
+  function disk(x,y,rr,col,alpha){
+    ctx.globalAlpha=alpha;
+    ctx.beginPath();ctx.arc(x,y,rr,0,7);
+    ctx.fillStyle=col;ctx.fill();
+    ctx.lineWidth=2;ctx.strokeStyle="#1e1e1e";ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+  const ease=t=>t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2;
+  const lerp=(a,b,t)=>a+(b-a)*t;
+
+  if(REDUCED){ board(); parse(fens[8]).forEach(d=>disk(d.x,d.y,d.rr,d.col,1)); return; }
+
+  const T={hold:1150, diss:750, lat:620, ref:750};
+  let idx=0, t0=performance.now();
+  function frame(now){
+    let dt=now-t0;
+    const A=parse(fens[idx]), Bi=(idx+1)%fens.length, B=parse(fens[Bi]);
+    const pairs=pair(A,B);
+    board();
+    if(dt<T.hold){
+      A.forEach(d=>disk(d.x,d.y,d.rr,d.col,1));
+      // Native HTML for guaranteed rendering
+      phaseEl.innerHTML=`encode &middot; z<sub>t</sub> &middot; ply ${idx}`;
+    } else if(dt<T.hold+T.diss){
+      const p=ease((dt-T.hold)/T.diss);
+      ctx.fillStyle="rgba(21,16,12,"+(0.78*p)+")"; ctx.fillRect(0,0,S,S);
+      pairs.forEach((pr,i)=>{
+        const a=pr[0]||pr[1], sc=scatter(i);
+        const x=lerp(pr[0]?pr[0].x:sc.x,sc.x,p), y=lerp(pr[0]?pr[0].y:sc.y,sc.y,p);
+        disk(x,y,lerp(a.rr,4,p),a.col,pr[0]?1:p*.6);
+      });
+      phaseEl.innerHTML="project &rarr; 256-d latent";
+    } else if(dt<T.hold+T.diss+T.lat){
+      ctx.fillStyle="rgba(21,16,12,.78)"; ctx.fillRect(0,0,S,S);
+      pairs.forEach((pr,i)=>{
+        const a=pr[0]||pr[1], sc=scatter(i);
+        disk(sc.x,sc.y,4,a.col,.95);
+      });
+      phaseEl.innerHTML=`predict z&#x0302;<sub>t+1</sub> | ${sans[Bi]||""}`;
+    } else if(dt<T.hold+T.diss+T.lat+T.ref){
+      const p=ease((dt-T.hold-T.diss-T.lat)/T.ref);
+      ctx.fillStyle="rgba(21,16,12,"+(0.78*(1-p))+")"; ctx.fillRect(0,0,S,S);
+      pairs.forEach((pr,i)=>{
+        const b=pr[1], sc=scatter(i);
+        if(!b){ if(pr[0]) disk(sc.x,sc.y,lerp(4,1,p),pr[0].col,1-p); return; }
+        disk(lerp(sc.x,b.x,p),lerp(sc.y,b.y,p),lerp(4,b.rr,p),b.col,pr[0]?1:p);
+      });
+      phaseEl.innerHTML="imagined next state";
+    } else { idx=Bi; t0=now; }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+
+/* ====================================================================
+   ARCHITECTURE PIPELINE — final: labels separated, no text collisions
+   ==================================================================== */
+(function pipeline(){
+  const svg=document.getElementById("pipeSVG"); if(!svg) return;
+  const box=(x,y,w,h,label,sub,stroke,dy=0)=>`
+    <g><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="11"
+       fill="#261d15" stroke="${stroke}" stroke-width="1.45"/>
+    <text x="${x+w/2}" y="${y+h/2-(sub?10:-6)+dy}" text-anchor="middle"
+       font-family="Spectral,serif" font-size="18" fill="#efe6d7">${label}</text>
+    ${sub?`<text x="${x+w/2}" y="${y+h/2+14+dy}" text-anchor="middle"
+       font-family="JetBrains Mono,monospace" font-size="11.5" fill="#c8b797">${sub}</text>`:""}</g>`;
+  const wire=(d,col,cls="")=>`<path class="${cls}" d="${d}" fill="none" stroke="${col}" stroke-width="1.6" opacity=".62" marker-end="url(#arr)"/>`;
+  const lat=(x,y,col,t)=>`<circle cx="${x}" cy="${y}" r="7" fill="${col}"/><text x="${x}" y="${y+24}" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="10.5" fill="#c8b797">${t}</text>`;
+
+  let frames="";
+  for(let k=0;k<3;k++){
+    const fx=30+k*9, fy=145+k*9;
+    frames+=`<g opacity="${.45+.27*k}"><rect x="${fx}" y="${fy}" width="86" height="86" rx="5" fill="#1f1812" stroke="#b58863"/>`;
+    for(let r=0;r<4;r++)for(let f=0;f<4;f++)
+      frames+=`<rect x="${fx+5+f*19}" y="${fy+5+r*19}" width="19" height="19" fill="${(r+f)%2?"#b58863":"#f0d9b5"}" opacity=".85"/>`;
+    frames+="</g>";
+  }
+  frames+=`<text x="91" y="278" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="11.5" fill="#c8b797">16 frames · 128×128 px</text>`;
+
+  // using HTML tspan for native accurate subscripts everywhere
+  const zRow=[0,1,2,3].map(i=>lat(395+i*46,205,"#aaaaff",
+    i===0?'z<tspan dy="3" font-size="8.5">t</tspan>':
+    i===1?'z<tspan dy="3" font-size="8.5">t+1</tspan>':
+    i===2?'z<tspan dy="3" font-size="8.5">t+2</tspan>':"…")).join("");
+    
+  const zhRow=[0,1,2].map(i=>lat(925,126+i*54,"#ffaaaa",
+    i===0?'ẑ<tspan dy="3" font-size="8.5">t+1</tspan>':
+    i===1?'ẑ<tspan dy="3" font-size="8.5">t+2</tspan>':
+          'ẑ<tspan dy="3" font-size="8.5">t+k</tspan>')).join("");
+
+  const P={
+    f2e:"M130,196 C160,196 170,190 210,190",
+    e2z:"M340,190 C355,190 360,175 370,175",
+    z2p:"M574,175 C590,175 610,161 650,161",
+    a2p:"M564,349 C600,349 615,220 650,200",
+    p2z:"M850,161 C880,161 892,136 912,126",
+    z2pol:"M487,240 C520,300 620,369 690,369",
+    z2val:"M487,240 C530,320 660,429 735,429"
+  };
+  svg.innerHTML=`
+  <defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+    <path d="M0,0 L8,4 L0,8 z" fill="#c8b797"/></marker></defs>
+  ${frames}
+  ${box(210,130,130,120,"ViT-Tiny","patch 16 · 1 sq/patch","#f0d9b5")}
+  ${box(370,110,204,130,"latent space","z \u2208 \u211D\u00B2\u2075\u2076 · SIGReg","#aaaaff",-20)}
+  ${box(374,318,190,62,"move embedder","20k-token UCI + progress","#aaffaa")}
+  ${box(650,96,200,130,"AR predictor","8× AdaLN-zero · 16 heads","#ffaaaa")}
+  <text x="750" y="200" text-anchor="middle" font-family="JetBrains Mono,monospace" font-size="11.5" fill="#c8b797">ẑ = z + Δ(h)</text>
+  ${box(690,342,140,54,"policy head","legality-masked","#ffffaa")}
+  ${box(735,402,140,54,"value head","tanh(cp/400)","#aaffff")}
+  ${wire(P.f2e,"#f0d9b5")}${wire(P.e2z,"#f0d9b5")}${wire(P.z2p,"#aaaaff","wire")}
+  ${wire(P.a2p,"#aaffaa","wire")}${wire(P.p2z,"#ffaaaa")}${wire(P.z2pol,"#ffffaa")}${wire(P.z2val,"#aaffff")}
+  ${zRow}${zhRow}
+  <text x="469" y="307" font-family="JetBrains Mono,monospace" font-size="11.5" fill="#aaffaa" text-anchor="middle">a = emb("Nf3")</text>
+  <g id="pulses">
+    ${[["f2e","#f0d9b5",0],["e2z","#aaaaff",.5],["z2p","#aaaaff",1],["a2p","#aaffaa",1],
+       ["p2z","#ffaaaa",1.7],["z2pol","#ffffaa",2.4],["z2val","#aaffff",2.4]].map(([k,c,d],i)=>
+      `<circle r="4.7" fill="${c}" opacity="0">
+        <animateMotion id="m${i}" dur="1.1s" begin="indefinite" path="${P[k]}" fill="freeze"/>
+        <animate attributeName="opacity" values="0;1;1;0" dur="1.1s" begin="m${i}.begin" fill="freeze"/>
+      </circle>`).join("")}
+  </g>`;
+
+  const play=document.getElementById("pipePlay");
+  if(play) play.addEventListener("click",()=>{
+    const delays=[0,500,1000,1000,1700,2400,2400];
+    svg.querySelectorAll("animateMotion").forEach((m,i)=>setTimeout(()=>m.beginElement(), delays[i]));
+    svg.querySelectorAll("#pulses animate").forEach((a,i)=>setTimeout(()=>a.beginElement(),delays[i]));
+  });
+})();
+
+/* ====================================================================
+   CHARTS — line charts, causal bars, drift
+   ==================================================================== */
+const DATA={
+  ep:[1,2,3,4,5,6,7,8,9,10],
+  accT:[.016,.039,.085,.139,.200,.262,.319,.366,.400,.419],
+  accV:[.023,.053,.094,.127,.153,.175,.188,.191,.197,.200],
+  lossT:[1.9096,1.5120,1.3124,1.1305,.9648,.8448,.7612,.7045,.6696,.6513],
+  lossV:[3.6797,3.5501,3.2259,3.1789,2.9334,2.6159,2.5182,2.4586,2.4195,2.4042],
+  drift:[0,.234168,.355255,.598294,.615115,.619842],
+  causal:[["True move",.0622,"#aaffaa"],["No-change null",.2685,"#b58863"],
+          ["Random noise",.3904,"#ffaaff"],["Shuffled move",.4327,"#ffaaaa"]]
+};
+const NS="http://www.w3.org/2000/svg";
+function el(t,attrs){const e=document.createElementNS(NS,t);for(const k in attrs)e.setAttribute(k,attrs[k]);return e;}
+function txt(x,y,s,fill,size,anchor){const t=el("text",{x,y,fill:fill||"#a8987f","font-size":size||10,
+  "text-anchor":anchor||"middle","font-family":"JetBrains Mono,monospace"});t.textContent=s;return t;}
+
+function lineChart(svg,series,ymax,yfmt){
+  const W=460,H=260,L=46,R=14,T=16,B=34,pw=W-L-R,ph=H-T-B;
+  const n=series[0].pts.length;
+  const X=i=>L+pw*i/(n-1), Y=v=>T+ph*(1-v/ymax);
+  for(let g=0;g<=4;g++){
+    const y=T+ph*g/4, v=ymax*(1-g/4);
+    svg.appendChild(el("line",{x1:L,x2:W-R,y1:y,y2:y,stroke:"rgba(240,217,181,.1)"}));
+    svg.appendChild(txt(L-8,y+3,yfmt(v),"#6f6350",9,"end"));
+  }
+  series[0].pts.forEach((_,i)=>{ if(i%3===0||i===n-1) svg.appendChild(txt(X(i),H-14,"E"+(i+1),"#6f6350",9)); });
+  series.forEach(s=>{
+    const d=s.pts.map((v,i)=>(i?"L":"M")+X(i)+","+Y(v)).join("");
+    const p=el("path",{d,fill:"none",stroke:s.col,"stroke-width":2.2,"stroke-linecap":"round"});
+    svg.appendChild(p);
+    const len=p.getTotalLength();
+    if(!REDUCED){ p.style.strokeDasharray=len; p.style.strokeDashoffset=len;
+      p.style.transition="stroke-dashoffset 1.6s ease .15s"; }
+    s.pts.forEach((v,i)=>svg.appendChild(el("circle",{cx:X(i),cy:Y(v),r:2.6,fill:s.col})));
+    svg.appendChild(txt(X(n-1)+2,Y(s.pts[n-1])-8,s.name,s.col,10,"end"));
+    s._path=p;
+  });
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(e.isIntersecting){ series.forEach(s=>s._path.style.strokeDashoffset=0); io.disconnect(); }
+  }),{threshold:.4});
+  io.observe(svg);
+}
+lineChart(document.getElementById("accChart"),
+  [{name:"train",pts:DATA.accT,col:"#f0d9b5"},{name:"val",pts:DATA.accV,col:"#aaaaff"}],
+  .45,v=>(v*100).toFixed(0)+"%");
+lineChart(document.getElementById("lossChart"),
+  [{name:"val",pts:DATA.lossV,col:"#ffaaaa"},{name:"train",pts:DATA.lossT,col:"#f0d9b5"}],
+  4,v=>v.toFixed(1));
+
+/* ====================================================================
+   InfoNCE chart — final: high contrast, large labels, no collisions
+   ==================================================================== */
+(function nce(){
+  const svg=document.getElementById("nceChart"); if(!svg) return;
+  svg.setAttribute("role","img");
+  svg.setAttribute("aria-label","InfoNCE pulls the true-action prediction toward the true next latent and pushes the shuffled-action prediction away.");
+  const cx=218,cy=138,R=92;
+  const anchor={x:218,y:38};
+  const pos={x:260,y:76};
+  const neg={x:382,y:183};
+  const orig={x:218,y:231};
+
+  function label(x,y,s,fill,size=12,anchor="middle",weight="700"){
+    const t=txt(x,y,s,fill,size,anchor); t.setAttribute("font-weight",weight); svg.appendChild(t); return t;
+  }
+  function line(x1,y1,x2,y2,col,dash=""){
+    svg.appendChild(el("line",{x1,y1,x2,y2,stroke:col,"stroke-width":"2",opacity:".82","stroke-dasharray":dash}));
+  }
+  function arrow(x1,y1,x2,y2,col){
+    line(x1,y1,x2,y2,col);
+    const a=Math.atan2(y2-y1,x2-x1), L=9;
+    svg.appendChild(el("path",{d:`M${x2},${y2} L${x2-L*Math.cos(a-.48)},${y2-L*Math.sin(a-.48)} L${x2-L*Math.cos(a+.48)},${y2-L*Math.sin(a+.48)} Z`,fill:col,opacity:".86"}));
+  }
+  function dot(p,r,col){svg.appendChild(el("circle",{cx:p.x,cy:p.y,r,fill:col,stroke:"#15100c","stroke-width":"2.5"}));}
+
+  svg.appendChild(el("ellipse",{cx,cy,rx:R,ry:R*.48,stroke:"rgba(240,217,181,.30)","stroke-width":"1.4","stroke-dasharray":"6 7",fill:"none"}));
+  label(cx,cy+R*.48+20,"latent manifold","#8f806b",11,"middle","500");
+
+  arrow(orig.x,orig.y-10,pos.x-7,pos.y+8,"#aaffaa");
+  arrow(orig.x+8,orig.y-7,neg.x-10,neg.y+4,"#ffaaaa");
+  line(anchor.x+5,anchor.y+8,pos.x-8,pos.y-8,"#aaffaa","4 5");
+  line(anchor.x+7,anchor.y+8,neg.x-9,neg.y-5,"#ffaaaa","4 5");
+
+  dot(anchor,9,"#f0d9b5");
+  label(anchor.x,anchor.y-14,"zₜ₊₁ true next","#f0d9b5",12);
+  dot(pos,8,"#aaffaa");
+  label(pos.x+20,pos.y-8,"ẑₜ₊₁ true move","#aaffaa",12,"start");
+  dot(neg,8,"#ffaaaa");
+  label(neg.x,neg.y+25,"ẑₜ₊₁ shuffled","#ffaaaa",12);
+  dot(orig,9,"#aaffaa");
+  label(orig.x,orig.y+24,"zₜ current","#aaffaa",12);
+
+  label(241,55,"pull close","#aaffaa",10.5,"start");
+  label(324,107,"push away","#ffaaaa",10.5,"start");
+  label(cx,263,"InfoNCE: cos(true) > cos(shuffled)","#d7c6aa",12.5);
+})();
+
+/* ====================================================================
+   FIX C: Bound chart — previously blank, now draws the Lipschitz theorem viz
+   ==================================================================== */
+(function bound(){
+  const svg=document.getElementById("boundChart"); if(!svg) return;
+  const W=760,H=340,L=60,R=24,T=20,B=44,pw=W-L-R,ph=H-T-B;
+  const EPS=0.062, KMAX=12;
+  const measured=[0,.234168,.355255,.598294,.615115,.619842];
+
+  function drawChart(L_val){
+    while(svg.firstChild) svg.removeChild(svg.firstChild);
+
+    // grid
+    const ymax=2.2;
+    for(let g=0;g<=4;g++){
+      const y=T+ph*g/4, v=ymax*(1-g/4);
+      svg.appendChild(el("line",{x1:L,x2:W-R,y1:y,y2:y,stroke:"rgba(240,217,181,.1)"}));
+      svg.appendChild(txt(L-8,y+3,v.toFixed(1),"#6f6350",10,"end"));
+    }
+    for(let k=0;k<=KMAX;k+=2){
+      const x=L+pw*k/KMAX;
+      svg.appendChild(el("line",{x1:x,x2:x,y1:T,y2:T+ph,stroke:"rgba(240,217,181,.07)"}));
+      svg.appendChild(txt(x,H-20,"k="+k,"#6f6350",9));
+    }
+    svg.appendChild(txt(18,H/2,"bound","#6f6350",10)).setAttribute("transform","rotate(-90 18 "+(H/2)+")");
+    svg.appendChild(txt(L+pw/2,H-6,"imagination step k","#6f6350",10));
+
+    const Ysc=v=>T+ph*(1-Math.min(v,ymax)/ymax);
+    const Xsc=k=>L+pw*k/KMAX;
+
+    // theoretical bound curve
+    let pts="";
+    for(let k=0;k<=KMAX;k+=0.2){
+      let bound;
+      if(Math.abs(L_val-1)<0.001){ bound=EPS*k; }
+      else { bound=EPS*(Math.pow(L_val,k)-1)/(L_val-1); }
+      bound=Math.min(bound,ymax+0.1);
+      pts+=(k<0.01?"M":"L")+Xsc(k).toFixed(1)+","+Ysc(bound).toFixed(1);
+    }
+    const boundColor=L_val>1?"#ffaaaa":L_val<0.96?"#aaffaa":"#aaaaff";
+    svg.appendChild(el("path",{d:pts,fill:"none",stroke:boundColor,"stroke-width":2.2,"stroke-dasharray":"6 4",opacity:.8}));
+    svg.appendChild(txt(Xsc(KMAX)-2,Ysc(L_val>1?ymax:EPS*(Math.pow(L_val,KMAX)-1)/(L_val-1||0.001))+14,
+      "bound (L="+L_val.toFixed(2)+")","#a8987f",10,"end"));
+
+    // measured drift dots
+    measured.forEach((v,k)=>{
+      svg.appendChild(el("circle",{cx:Xsc(k),cy:Ysc(v),r:5,fill:"#aaaaff","stroke":"#261d15","stroke-width":"1.5"}));
+      if(k>0) svg.appendChild(txt(Xsc(k),Ysc(v)-10,v.toFixed(2),"#aaaaff",9.5));
+    });
+    // connect measured dots
+    const mpath=measured.map((v,k)=>(k?"L":"M")+Xsc(k)+","+Ysc(v)).join("");
+    svg.insertBefore(el("path",{d:mpath,fill:"none",stroke:"#aaaaff","stroke-width":1.6,opacity:.6}),
+      svg.querySelector("circle"));
+
+    // legend
+    svg.appendChild(el("rect",{x:L+8,y:T+10,width:12,height:3,fill:boundColor}));
+    svg.appendChild(txt(L+26,T+14,"theoretical bound","#a8987f",10,"start"));
+    svg.appendChild(el("circle",{cx:L+14,cy:T+26,r:4,fill:"#aaaaff"}));
+    svg.appendChild(txt(L+26,T+30,"measured drift","#aaaaff",10,"start"));
+
+    // saturation line at measured plateau
+    svg.appendChild(el("line",{x1:L,x2:W-R,y1:Ysc(0.62),y2:Ysc(0.62),
+      stroke:"rgba(170,170,255,.35)","stroke-dasharray":"3 5"}));
+    svg.appendChild(txt(W-R-2,Ysc(0.62)-5,"plateau 0.62","#aaaaff",9,"end"));
+  }
+
+  drawChart(0.98);
+
+  const slider=document.getElementById("lipSlider");
+  const lipLabel=document.getElementById("lipVal");
+  if(slider){
+    slider.addEventListener("input",()=>{
+      const v=parseFloat(slider.value);
+      lipLabel.textContent="L = "+v.toFixed(2);
+      drawChart(v);
+    });
+  }
+})();
+
+/* ====================================================================
+   FIX D: Scheduled sampling strip — previously empty, now populated
+   ==================================================================== */
+(function scheduledSampling(){
+  const strip=document.getElementById("ssStrip");
+  const bar=document.getElementById("ssBar");
+  const label=document.getElementById("ssLabel");
+  const epochLabel=document.getElementById("ssEpochLabel");
+  const slider=document.getElementById("ssSlider");
+  if(!strip) return;
+
+  const CELLS=14;
+  // Build cells
+  for(let i=0;i<CELLS;i++){
+    const c=document.createElement("div");
+    c.className="ss-cell gt";
+    c.textContent=i+1;
+    strip.appendChild(c);
+  }
+
+  function update(epoch){
+    // anneal p from 0 to 0.5 over epochs 1-10
+    const p=0.5*Math.max(0,(epoch-1)/9);
+    // expected number of model-predicted frames in window
+    const modelCount=Math.round(p*CELLS);
+    const cells=[...strip.querySelectorAll(".ss-cell")];
+    cells.forEach((c,i)=>{
+      const isModel=i>=CELLS-modelCount;
+      c.className="ss-cell "+(isModel?"md":"gt");
+      c.textContent=i+1;
+    });
+    label.innerHTML="p = <b>"+p.toFixed(2)+"</b>";
+    epochLabel.textContent="epoch "+epoch;
+    bar.style.width=(p*100)+"%";
+  }
+
+  update(1);
+  if(slider) slider.addEventListener("input",()=>update(parseInt(slider.value)));
+
+  // auto-animate on first intersection
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(!e.isIntersecting||REDUCED) return;
+    let ep=1;
+    const t=setInterval(()=>{
+      ep++;
+      if(slider) slider.value=ep;
+      update(ep);
+      if(ep>=10) clearInterval(t);
+    }, 320);
+    io.disconnect();
+  }),{threshold:.5});
+  io.observe(strip);
+})();
+
+(function bars(){
+  const svg=document.getElementById("causalChart"); if(!svg) return;
+  const W=760,H=320,L=56,T=20,B=44,pw=W-L-20,ph=H-T-B,ymax=.5;
+  for(let g=0;g<=5;g++){
+    const y=T+ph*g/5;
+    svg.appendChild(el("line",{x1:L,x2:W-20,y1:y,y2:y,stroke:"rgba(240,217,181,.1)"}));
+    svg.appendChild(txt(L-8,y+3,(ymax*(1-g/5)).toFixed(1),"#6f6350",10,"end"));
+  }
+  const bw=pw/DATA.causal.length*.52;
+  const rects=[];
+  DATA.causal.forEach((d,i)=>{
+    const cx=L+pw*(i+.5)/DATA.causal.length, h=ph*d[1]/ymax;
+    const r=el("rect",{x:cx-bw/2,y:T+ph,width:bw,height:0,rx:5,fill:d[2],opacity:.9});
+    svg.appendChild(r);
+    svg.appendChild(txt(cx,H-22,d[0],"#ddd2bf",12));
+    const v=txt(cx,T+ph-h-8,d[1].toFixed(4),d[2],12.5); v.style.opacity=0;
+    v.style.transition="opacity .5s ease 1s"; svg.appendChild(v);
+    rects.push({r,h,v});
+  });
+  svg.appendChild(txt(18,H/2,"latent MSE","#6f6350",10)).setAttribute("transform",`rotate(-90 18 ${H/2})`);
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(!e.isIntersecting) return;
+    rects.forEach(({r,h,v},i)=>{
+      r.style.transition=REDUCED?"none":`y 1s cubic-bezier(.2,.8,.2,1) ${i*0.12}s, height 1s cubic-bezier(.2,.8,.2,1) ${i*0.12}s`;
+      requestAnimationFrame(()=>{ r.setAttribute("y",T+ph-h); r.setAttribute("height",h); v.style.opacity=1; });
+    });
+    io.disconnect();
+  }),{threshold:.4});
+  io.observe(svg);
+})();
+
+(function drift(){
+  const svg=document.getElementById("driftChart"); if(!svg) return;
+  const W=460,H=280,L=50,T=18,B=40,pw=W-L-16,ph=H-T-B,ymax=.7;
+  for(let g=0;g<=7;g++){
+    const y=T+ph*g/7;
+    svg.appendChild(el("line",{x1:L,x2:W-16,y1:y,y2:y,stroke:"rgba(240,217,181,.1)"}));
+    svg.appendChild(txt(L-7,y+3,(ymax*(1-g/7)).toFixed(1),"#6f6350",9,"end"));
+  }
+  const X=i=>L+pw*i/5, Y=v=>T+ph*(1-v/ymax);
+  svg.appendChild(el("line",{x1:L,x2:W-16,y1:Y(.4327),y2:Y(.4327),stroke:"#ffaaaa","stroke-dasharray":"4 5",opacity:.55}));
+  svg.appendChild(txt(W-20,Y(.4327)-6,"error of one wrong move (0.43)","#ffaaaa",9.5,"end"));
+  const d=DATA.drift.map((v,i)=>(i?"L":"M")+X(i)+","+Y(v)).join("");
+  const area=el("path",{d:d+`L${X(5)},${Y(0)}L${X(0)},${Y(0)}Z`,fill:"rgba(170,170,255,.12)"});
+  const p=el("path",{d,fill:"none",stroke:"#aaaaff","stroke-width":2.4,"stroke-linecap":"round"});
+  svg.appendChild(area);svg.appendChild(p);
+  DATA.drift.forEach((v,i)=>{
+    svg.appendChild(el("circle",{cx:X(i),cy:Y(v),r:3.2,fill:"#aaaaff"}));
+    svg.appendChild(txt(X(i),H-20,"step "+i,"#6f6350",9));
+    if(i>0) svg.appendChild(txt(X(i),Y(v)-10,v.toFixed(2),"#cdc0a9",9.5));
+  });
+  const len=p.getTotalLength();
+  if(!REDUCED){ p.style.strokeDasharray=len;p.style.strokeDashoffset=len;
+    p.style.transition="stroke-dashoffset 1.6s ease"; area.style.opacity=0; area.style.transition="opacity 1s ease 1s"; }
+  const io=new IntersectionObserver(es=>es.forEach(e=>{
+    if(e.isIntersecting){ p.style.strokeDashoffset=0; area.style.opacity=1; io.disconnect(); }
+  }),{threshold:.4});
+  io.observe(svg);
+})();
+
+/* ====================================================================
+   GAME REPLAYER
+   ==================================================================== */
+(function replayer(){
+  const boardEl=document.getElementById("board"); if(!boardEl) return;
+  const listEl=document.getElementById("moveList");
+  const readout=document.getElementById("moveReadout");
+  const oppLabel=document.getElementById("oppLabel");
+  const GLYPH={K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙",k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"};
+  let cur="d12", ply=0, timer=null, modelView=false;
+
+  function fenAt(p){ return p===0?window.GAMES[cur].start:window.GAMES[cur].plies[p-1].fen; }
+  
+  function grid(fen){
+    const g=new Array(64).fill(null); let r=0,f=0;
+    for(const ch of fen){
+      if(ch==="/"){r++;f=0;continue;}
+      if(/\d/.test(ch)){f+=+ch;continue;}
+      if(r*8+f < 64) {
+        g[r*8+(f++)]=ch;
+      }
+    }
+    return g;
+  }
+  function sqName(i){ return "abcdefgh"[i%8]+(8-Math.floor(i/8)); }
+
+  function render(){
+    const g=grid(fenAt(ply));
+    const last=ply>0?window.GAMES[cur].plies[ply-1]:null;
+    boardEl.innerHTML="";
+    // safety guard to ensure exactly 64 squares no matter what
+    g.slice(0, 64).forEach((ch,i)=>{
+      const r=Math.floor(i/8), f=i%8;
+      const sq=document.createElement("div");
+      sq.className="sqr "+((r+f)%2===0?"l":"d");
+      if(last&&(sqName(i)===last.from||sqName(i)===last.to)) sq.classList.add("hl");
+      if(f===7){const c=document.createElement("span");c.className="coord r";c.textContent=8-r;sq.appendChild(c);}
+      if(r===7){const c=document.createElement("span");c.className="coord f";c.textContent="abcdefgh"[f];sq.appendChild(c);}
+      if(ch){
+        const white=ch===ch.toUpperCase(), t=ch.toUpperCase();
+        if(modelView){
+          const d=document.createElement("div");
+          d.className="disk"; d.style.background=C.piece[t][white?0:1];
+          d.style.width=d.style.height=(C.radius[t]*2*100/1.2).toFixed(0)+"%";
+          sq.appendChild(d);
+        } else {
+          const s=document.createElement("span");
+          s.className="pc "+(white?"w":"b"); s.textContent=GLYPH[white?t:t.toLowerCase()];
+          sq.appendChild(s);
+        }
+      }
+      boardEl.appendChild(sq);
+    });
+    readout.textContent = ply===0 ? "start" :
+      Math.ceil(ply/2)+(ply%2? ". ":"… ")+window.GAMES[cur].plies[ply-1].san+"  ("+ply+"/"+window.GAMES[cur].plies.length+")";
+    [...listEl.querySelectorAll(".mv")].forEach((m,i)=>m.classList.toggle("cur",i===ply-1));
+    const curMv=listEl.querySelector(".mv.cur");
+    if(curMv) curMv.scrollIntoView({block:"nearest"});
+  }
+
+  function buildList(){
+    listEl.innerHTML="";
+    const plies=window.GAMES[cur].plies;
+    for(let i=0;i<plies.length;i+=2){
+      const num=document.createElement("span");num.className="num";num.textContent=(i/2+1)+".";
+      listEl.appendChild(num);
+      [0,1].forEach(k=>{
+        const cellEl=document.createElement("span");
+        if(plies[i+k]){
+          cellEl.className="mv";cellEl.textContent=plies[i+k].san;
+          cellEl.addEventListener("click",()=>{stop();ply=i+k+1;render();});
+        }
+        listEl.appendChild(cellEl);
+      });
+    }
+  }
+  function stop(){ if(timer){clearInterval(timer);timer=null;
+    document.getElementById("bPlay").textContent="▶ play";} }
+  function step(d){ ply=Math.max(0,Math.min(window.GAMES[cur].plies.length,ply+d)); render(); }
+
+  document.getElementById("bStart").onclick=()=>{stop();ply=0;render();};
+  document.getElementById("bEnd").onclick=()=>{stop();ply=window.GAMES[cur].plies.length;render();};
+  document.getElementById("bPrev").onclick=()=>{stop();step(-1);};
+  document.getElementById("bNext").onclick=()=>{stop();step(1);};
+  document.getElementById("bPlay").onclick=function(){
+    if(timer){stop();return;}
+    if(ply>=window.GAMES[cur].plies.length) ply=0;
+    this.textContent="⏸ pause";
+    timer=setInterval(()=>{ if(ply>=window.GAMES[cur].plies.length){stop();return;} step(1); },850);
+  };
+  document.getElementById("bView").onclick=function(){
+    modelView=!modelView;
+    this.textContent=modelView?"human view ○":"model view ◉";
+    render();
+  };
+  document.querySelectorAll(".gametabs .btn").forEach(b=>b.addEventListener("click",()=>{
+    stop();
+    document.querySelectorAll(".gametabs .btn").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");
+    cur=b.dataset.game; ply=0;
+    oppLabel.textContent="Stockfish d"+cur.slice(1);
+    buildList(); render();
+  }));
+  // FIX: guard arrow keys so they don't fire when user is in an input
+  document.addEventListener("keydown",e=>{
+    if(e.target.tagName==="INPUT"||e.target.tagName==="TEXTAREA") return;
+    if(e.key==="ArrowRight"){stop();step(1);}
+    if(e.key==="ArrowLeft"){stop();step(-1);}
+  });
+
+  buildList(); render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+torch>=2.2
+torchvision
+timm>=0.9
+einops
+python-chess>=1.999
+pillow
+numpy
+tqdm
+matplotlib
