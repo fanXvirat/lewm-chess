@@ -293,7 +293,7 @@ pre.cmd .c{color:#6f6350} pre.cmd .g{color:var(--mint)}
 .tree{font-family:var(--mono);font-size:13px;color:#cdbfa4;line-height:1.85}
 .tree b{color:var(--tan);font-weight:500}
 
-/* ------- play demo ------- */
+/* ------- play demo & analyze demo ------- */
 .play-arena{display:grid;grid-template-columns:minmax(300px,420px) 1fr;gap:32px;align-items:start;margin-top:10px}
 @media(max-width:880px){.play-arena{grid-template-columns:1fr}}
 .play-board-shell{border:1px solid var(--line-strong);border-radius:12px;padding:14px;background:var(--panel)}
@@ -355,6 +355,24 @@ pre.cmd .c{color:#6f6350} pre.cmd .g{color:var(--mint)}
 }
 .wake-banner.show{display:block}
 
+/* Analyze Mode specific styles */
+.fen-input-wrap { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.fen-input {
+  flex: 1; padding: 10px 14px; background: var(--panel-2); border: 1px solid var(--line-strong); 
+  color: var(--text); font-family: var(--mono); font-size: 13px; border-radius: 6px; min-width: 200px;
+}
+.fen-input:focus { outline: none; border-color: var(--tan); }
+.top5-list { list-style: none; padding: 0; margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.top5-list li {
+  display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  font-family: var(--mono); font-size: 13.5px;
+}
+.top5-list li:first-child { background: rgba(170,255,170,.08); border-color: rgba(170,255,170,.3); color: var(--mint); font-weight: 700; }
+.top5-list li .rank { color: var(--muted); font-size: 11.5px; font-weight: 400; width: 24px; }
+.top5-list li .san { flex: 1; margin-left: 8px; }
+.top5-list li .uci { color: var(--muted); font-size: 11px; }
+
 footer{
   border-top:1px solid var(--line);margin-top:90px;
   padding:46px 48px 60px;max-width:var(--maxw);margin-left:auto;margin-right:auto;
@@ -407,7 +425,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <a href="#latent"     data-s="latent"><b>h</b><span>Latent health</span></a>
   <a href="#games"      data-s="games"><b>i</b><span>vs. Stockfish</span></a>
   <a href="#reproduce"  data-s="reproduce"><b>j</b><span>Reproduce</span></a>
-  <a href="#play"       data-s="play"><b>k</b><span>Play it</span></a>
+  <a href="#play"       data-s="play"><b>k</b><span>Play / Analyze</span></a>
 </nav>
 
 <main>
@@ -858,20 +876,23 @@ code{white-space:normal;overflow-wrap:anywhere}
   </div>
 </section>
 
-<!-- ================= k · PLAY ================= -->
+<!-- ================= k · PLAY / ANALYZE ================= -->
 <section id="play">
-  <div class="eyebrow rv"><span class="sq"></span>k · play it</div>
-  <h2 class="rv">The model is live. <em>Make a move.</em></h2>
-  <p class="rv">You play White. Click a piece, then click where to move it — legal destination squares
-  are highlighted. LeWM-Chess replies from its policy head, running on CPU via a
-  <a href="https://huggingface.co/spaces/fanXvirat/LeWM-chess" target="_blank" rel="noopener">Hugging Face Space</a>.
-  The first move may take ~30 s if the Space is waking up.</p>
+  <div class="eyebrow rv"><span class="sq"></span>k · interactive demo</div>
+  <h2 class="rv">The model is live. <em>Play it or analyze a position.</em></h2>
+  <p class="rv">The model's policy head is running via CPU on a Hugging Face Space. Choose a mode below. (The first request may take ~30 s to wake the Space).</p>
+
+  <div class="gametabs rv" style="margin-bottom: 24px;">
+    <button class="btn active" id="tabPlay">Play vs LeWM</button>
+    <button class="btn" id="tabAnalyze">Analyze Top-5</button>
+  </div>
 
   <div class="wake-banner rv" id="wakeBanner">
     ⏳ Waking the model — Hugging Face free-tier Spaces sleep after inactivity. Usually takes 20–40 s.
   </div>
 
-  <div class="play-arena rv">
+  <!-- Play Mode UI -->
+  <div class="play-arena rv" id="modePlay">
     <!-- board -->
     <div class="play-board-shell">
       <div class="play-board" id="playBoard" aria-label="Interactive chess board — you play White"></div>
@@ -891,16 +912,9 @@ code{white-space:normal;overflow-wrap:anywhere}
       <div class="play-info">
         <h4>How it works</h4>
         <p>Your move is sent as a FEN string to the model's policy head. It picks the
-        highest-scoring legal move from its 20k-vocabulary logit output — no search,
-        pure imagination.</p>
+        highest-scoring legal move from its 20k-vocabulary logit output — no search, pure imagination.</p>
         <p>The model was never told the rules of chess. Every legal-move guarantee comes
         from a legality mask applied to the raw logits at inference time.</p>
-        <div>
-          <span class="badge">100% legal moves</span>
-          <span class="badge">38% Stockfish top-1 match</span>
-          <span class="badge">12 cp median cost</span>
-          <span class="badge">pixel-trained only</span>
-        </div>
       </div>
       <div class="chart-card" style="margin:0">
         <h4>Move log</h4>
@@ -909,6 +923,33 @@ code{white-space:normal;overflow-wrap:anywhere}
       </div>
     </div>
   </div>
+
+  <!-- Analyze Mode UI -->
+  <div class="play-arena rv" id="modeAnalyze" style="display:none;">
+    <!-- read-only board for visual reference -->
+    <div class="play-board-shell">
+      <div class="play-board" id="analyzeBoard" aria-label="Board showing the position to analyze"></div>
+    </div>
+    
+    <!-- analysis controls -->
+    <div class="play-side">
+      <div class="play-info">
+        <h4>Analyze Position</h4>
+        <p>Paste any FEN string below. The model will calculate its top 5 raw policy logits (imagined best moves) instantly without search.</p>
+        <div class="fen-input-wrap" style="margin-top: 14px;">
+          <input type="text" id="fenAnalyzeInput" class="fen-input" placeholder="Paste FEN here..." value="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1">
+          <button class="btn" id="btnLoadFen">Load</button>
+        </div>
+        <button class="btn primary" id="btnAnalyze" style="width: 100%;">Analyze Top 5</button>
+        
+        <ul class="top5-list" id="top5List">
+          <!-- Populated by JS -->
+          <li style="justify-content: center; color: var(--muted); background: transparent; border: none;">Awaiting input...</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
 </section>
 
 <footer>
@@ -1394,7 +1435,6 @@ lineChart(document.getElementById("lossChart"),
     const Ysc=v=>T+ph*(1-Math.min(v,ymax)/ymax);
     const Xsc=k=>L+pw*k/KMAX;
 
-    // theoretical bound curve
     let pts="";
     for(let k=0;k<=KMAX;k+=0.2){
       let bound;
@@ -1408,7 +1448,6 @@ lineChart(document.getElementById("lossChart"),
     svg.appendChild(txt(Xsc(KMAX)-2,Ysc(L_val>1?ymax:EPS*(Math.pow(L_val,KMAX)-1)/(L_val-1||0.001))+14,
       "bound (L="+L_val.toFixed(2)+")","#a8987f",10,"end"));
 
-    // measured drift dots
     measured.forEach((v,k)=>{
       svg.appendChild(el("circle",{cx:Xsc(k),cy:Ysc(v),r:5,fill:"#aaaaff","stroke":"#261d15","stroke-width":"1.5"}));
       if(k>0) svg.appendChild(txt(Xsc(k),Ysc(v)-10,v.toFixed(2),"#aaaaff",9.5));
@@ -1417,13 +1456,11 @@ lineChart(document.getElementById("lossChart"),
     svg.insertBefore(el("path",{d:mpath,fill:"none",stroke:"#aaaaff","stroke-width":1.6,opacity:.6}),
       svg.querySelector("circle"));
 
-    // legend
     svg.appendChild(el("rect",{x:L+8,y:T+10,width:12,height:3,fill:boundColor}));
     svg.appendChild(txt(L+26,T+14,"theoretical bound","#a8987f",10,"start"));
     svg.appendChild(el("circle",{cx:L+14,cy:T+26,r:4,fill:"#aaaaff"}));
     svg.appendChild(txt(L+26,T+30,"measured drift","#aaaaff",10,"start"));
 
-    // saturation line
     svg.appendChild(el("line",{x1:L,x2:W-R,y1:Ysc(0.62),y2:Ysc(0.62),
       stroke:"rgba(170,170,255,.35)","stroke-dasharray":"3 5"}));
     svg.appendChild(txt(W-R-2,Ysc(0.62)-5,"plateau 0.62","#aaaaff",9,"end"));
@@ -1647,8 +1684,11 @@ lineChart(document.getElementById("lossChart"),
     render();
   };
   document.querySelectorAll(".gametabs .btn").forEach(b=>b.addEventListener("click",()=>{
+    // only handle the replayer tabs here
+    if(b.id === "tabPlay" || b.id === "tabAnalyze") return;
+    
     stop();
-    document.querySelectorAll(".gametabs .btn").forEach(x=>x.classList.remove("active"));
+    document.querySelectorAll(".gametabs .btn:not(#tabPlay):not(#tabAnalyze)").forEach(x=>x.classList.remove("active"));
     b.classList.add("active");
     cur=b.dataset.game; ply=0;
     oppLabel.textContent="Stockfish d"+cur.slice(1);
@@ -1664,31 +1704,34 @@ lineChart(document.getElementById("lossChart"),
 })();
 
 /* ====================================================================
-   LIVE PLAY DEMO — calls HF Space API via robust @gradio/client
+   LIVE PLAY DEMO & ANALYZE DEMO
    ==================================================================== */
-(async function playDemo(){
-  const boardEl  = document.getElementById("playBoard"); if(!boardEl) return;
-  const statusDot  = document.getElementById("statusDot");
-  const statusText = document.getElementById("statusText");
-  const logEl      = document.getElementById("playLog");
-  const wakeBanner = document.getElementById("wakeBanner");
-
+(async function interactiveModes(){
+  const HF_SPACE_NAME = "fanXvirat/LeWM-chess";
   const GLYPH = {K:"♔",Q:"♕",R:"♖",B:"♗",N:"♘",P:"♙",k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"};
   const FILES = "abcdefgh";
 
-  // ---- minimal chess state backed by chess.js ----
-  let chessGame = new Chess();
-  let fen       = chessGame.fen();
-  let selected  = null;   
-  let legalSquares = []; 
-  let flipped   = false;
-  let busy      = false;
-  let firstRequest = true;
-
-  // Gradio client
   let hfClient = null;
+  let firstRequest = true;
+  const wakeBanner = document.getElementById("wakeBanner");
 
-  // ---- FEN helpers ----
+  // Mode toggling
+  const tabPlay = document.getElementById("tabPlay");
+  const tabAnalyze = document.getElementById("tabAnalyze");
+  const modePlay = document.getElementById("modePlay");
+  const modeAnalyze = document.getElementById("modeAnalyze");
+
+  tabPlay.onclick = () => {
+    tabPlay.classList.add("active"); tabAnalyze.classList.remove("active");
+    modePlay.style.display = "grid"; modeAnalyze.style.display = "none";
+  };
+  tabAnalyze.onclick = () => {
+    tabAnalyze.classList.add("active"); tabPlay.classList.remove("active");
+    modeAnalyze.style.display = "grid"; modePlay.style.display = "none";
+    renderAnalyzeBoard();
+  };
+
+  // ----- FEN Helpers -----
   function fenBoard(f){
     const rows = f.split(" ")[0].split("/");
     const g = new Array(64).fill(null);
@@ -1701,13 +1744,23 @@ lineChart(document.getElementById("lossChart"),
     });
     return g;
   }
-
-  function sqIdx(file,rank){ return rank*8+file; } 
   function idxToAlg(i){ return FILES[i%8]+(8-Math.floor(i/8)); }
   function algToIdx(s){ return (8-parseInt(s[1]))*8+FILES.indexOf(s[0]); }
 
-  // ---- render board ----
-  function render(){
+  // ===================== PLAY MODE =====================
+  const boardEl  = document.getElementById("playBoard");
+  const statusDot  = document.getElementById("statusDot");
+  const statusText = document.getElementById("statusText");
+  const logEl      = document.getElementById("playLog");
+
+  let chessGame = new Chess();
+  let fen = chessGame.fen();
+  let selected = null;   
+  let legalSquares = []; 
+  let flipped = false;
+  let busy = false;
+
+  function renderPlayBoard(){
     const board = fenBoard(fen);
     boardEl.innerHTML="";
     for(let vi=0;vi<64;vi++){
@@ -1734,19 +1787,16 @@ lineChart(document.getElementById("lossChart"),
         s.textContent = GLYPH[white ? t : t.toLowerCase()];
         sq.appendChild(s);
       }
-      sq.addEventListener("click", () => handleClick(i));
+      sq.addEventListener("click", () => handlePlayClick(i));
       boardEl.appendChild(sq);
     }
   }
 
-  // ---- click handler ----
-  function handleClick(idx){
+  function handlePlayClick(idx){
     if(busy) return;
-    if(chessGame.turn() !== "w"){ setStatus("idle","Wait — model is thinking."); return; }
+    if(chessGame.turn() !== "w"){ setPlayStatus("idle","Wait — model is thinking."); return; }
 
     const alg = idxToAlg(idx);
-
-    // if a highlighted legal destination is clicked
     if(legalSquares.includes(idx) && selected !== null){
       const fromAlg = idxToAlg(selected);
       const moves = chessGame.moves({ square: fromAlg, verbose: true });
@@ -1757,59 +1807,48 @@ lineChart(document.getElementById("lossChart"),
       return;
     }
 
-    // select own piece
     const pc = chessGame.get(alg);
     if(pc && pc.color === "w"){
       selected = idx;
       const moves = chessGame.moves({ square: alg, verbose: true });
       legalSquares = moves.map(m => algToIdx(m.to));
-      setStatus("idle","Selected "+alg+" — click a highlighted square to move.");
+      setPlayStatus("idle","Selected "+alg+" — click a highlighted square to move.");
     } else {
       selected = null; legalSquares = [];
-      setStatus("idle","Your turn — click a White piece to begin.");
+      setPlayStatus("idle","Your turn — click a White piece to begin.");
     }
-    render();
+    renderPlayBoard();
   }
 
-  // ---- send player move → get model reply ----
   async function sendPlayerMove(uci){
     busy = true; selected = null; legalSquares = [];
-    setStatus("thinking","Sending your move…");
+    setPlayStatus("thinking","Sending your move…");
 
-    // 1. Process player move locally via chess.js to get exact FEN
     const from = uci.substring(0, 2);
     const to = uci.substring(2, 4);
     const promotion = uci.length === 5 ? uci[4] : undefined;
     
     const playerMoveObj = chessGame.move({ from, to, promotion, sloppy: true });
     if (!playerMoveObj) {
-       setStatus("err", "Invalid move attempted.");
-       busy = false; render(); return;
+       setPlayStatus("err", "Invalid move attempted.");
+       busy = false; renderPlayBoard(); return;
     }
     
     fen = chessGame.fen();
-    appendLog(playerMoveObj.san, "you");
-    render(); // Update UI instantly to show player's move
+    appendPlayLog(playerMoveObj.san, "you");
+    renderPlayBoard(); 
 
-    // 2. Request model move via API
-    setStatus("thinking","LeWM is imagining…");
+    setPlayStatus("thinking","LeWM is imagining…");
     if (firstRequest) { wakeBanner.classList.add("show"); firstRequest = false; }
 
     try {
       if(!hfClient) {
         const { Client } = await import("https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js");
-        hfClient = await Client.connect("fanXvirat/LeWM-chess");
+        hfClient = await Client.connect(HF_SPACE_NAME);
       }
-
-      // Try fn_index 0 (most robust for single-function spaces)
-      let r2;
-      try {
-          r2 = await hfClient.predict(0, [fen]);
-      } catch (err) {
-          // fallback if endpoint was explicitly named predict
-          r2 = await hfClient.predict("/predict", [fen]);
-      }
-
+      
+      // Explicitly hit the "play" endpoint
+      const r2 = await hfClient.predict("/play", [fen]);
       const state2 = r2.data[0]; 
       wakeBanner.classList.remove("show");
 
@@ -1817,7 +1856,6 @@ lineChart(document.getElementById("lossChart"),
           throw new Error(state2.message || "Server returned an error");
       }
       
-      // 3. Process model move locally
       if (state2.move) {
          const mFrom = state2.move.substring(0, 2);
          const mTo = state2.move.substring(2, 4);
@@ -1825,34 +1863,31 @@ lineChart(document.getElementById("lossChart"),
          const modelMoveObj = chessGame.move({ from: mFrom, to: mTo, promotion: mPromo, sloppy: true });
          
          fen = chessGame.fen(); 
-         appendLog(modelMoveObj ? modelMoveObj.san : state2.move, "model");
+         appendPlayLog(modelMoveObj ? modelMoveObj.san : state2.san, "model");
       }
 
       if (state2.status !== "ongoing") { endGame(state2.status); return; }
-      setStatus("done", "Model played " + (state2.move || "") + ". Your turn.");
+      setPlayStatus("done", "Model played " + (state2.san || state2.move || "") + ". Your turn.");
       
     } catch(e) {
       wakeBanner.classList.remove("show");
-      console.error("Gradio API error:", e);
-      setStatus("err", "Error: " + (e.message || "Failed to connect") + ". Check the HF Space.");
-      
-      // Undo local move so user isn't stuck
+      setPlayStatus("err", "Error: " + (e.message || "Failed to connect") + ". Check HF Space.");
       chessGame.undo();
       fen = chessGame.fen();
     } finally {
       busy = false; 
-      render();
+      renderPlayBoard();
     }
   }
 
   function endGame(result){
     busy=false;
     const msg = result==="1-0"?"White wins (1–0)":result==="0-1"?"Black wins (0–1)":"Draw (½–½)";
-    setStatus("done","Game over — "+msg+". Press New Game to play again.");
-    render();
+    setPlayStatus("done","Game over — "+msg+". Press New Game to play again.");
+    renderPlayBoard();
   }
 
-  function setStatus(state, text){
+  function setPlayStatus(state, text){
     statusText.textContent=text;
     statusDot.className="dot";
     if(state==="thinking") statusDot.classList.add("thinking");
@@ -1860,9 +1895,8 @@ lineChart(document.getElementById("lossChart"),
     else if(state==="done") statusDot.classList.add("done");
   }
 
-  function appendLog(san, who){
+  function appendPlayLog(san, who){
     const youMoves = logEl.querySelectorAll(".mv.you").length;
-
     if(who==="you"){
       const num=document.createElement("span"); num.className="num";
       num.textContent=(youMoves+1)+".";
@@ -1885,27 +1919,105 @@ lineChart(document.getElementById("lossChart"),
     logEl.scrollTop=logEl.scrollHeight;
   }
 
-  // ---- controls ----
   document.getElementById("btnNewGame").onclick=()=>{
-    chessGame.reset();
-    fen = chessGame.fen();
+    chessGame.reset(); fen = chessGame.fen();
     selected = null; legalSquares = []; busy = false; firstRequest = true;
     logEl.innerHTML = ""; wakeBanner.classList.remove("show");
-    setStatus("idle", "Your turn — click a White piece to begin.");
-    render();
+    setPlayStatus("idle", "Your turn — click a White piece to begin.");
+    renderPlayBoard();
   };
-
   document.getElementById("btnUndo").onclick=()=>{
-    setStatus("idle","Undo not supported cleanly without a session — press New Game to restart.");
+    setPlayStatus("idle","Undo not supported without session — press New Game.");
   };
-
   document.getElementById("btnFlip").onclick=()=>{
-    flipped=!flipped; render();
+    flipped=!flipped; renderPlayBoard();
   };
 
-  // ---- init ----
-  setStatus("idle","Your turn — click a White piece to begin.");
-  render();
+  setPlayStatus("idle","Your turn — click a White piece to begin.");
+  renderPlayBoard();
+
+
+  // ===================== ANALYZE MODE =====================
+  const analyzeBoardEl = document.getElementById("analyzeBoard");
+  const fenAnalyzeInput = document.getElementById("fenAnalyzeInput");
+  const btnLoadFen = document.getElementById("btnLoadFen");
+  const btnAnalyze = document.getElementById("btnAnalyze");
+  const top5List = document.getElementById("top5List");
+  
+  let analyzeChess = new Chess();
+
+  function renderAnalyzeBoard() {
+    const board = fenBoard(analyzeChess.fen());
+    analyzeBoardEl.innerHTML="";
+    for(let i=0; i<64; i++){
+      const r = Math.floor(i/8), f = i%8;
+      const sq = document.createElement("div");
+      sq.className="sqr "+((r+f)%2===0?"l":"d");
+
+      if(f===7){const c=document.createElement("span");c.className="coord r";c.textContent=8-r;sq.appendChild(c);}
+      if(r===7){const c=document.createElement("span");c.className="coord f";c.textContent=FILES[f];sq.appendChild(c);}
+
+      if(board[i]){
+        const white = board[i] === board[i].toUpperCase();
+        const t = board[i].toUpperCase();
+        const s = document.createElement("span");
+        s.className = "pc " + (white ? "w" : "b");
+        s.textContent = GLYPH[white ? t : t.toLowerCase()];
+        sq.appendChild(s);
+      }
+      analyzeBoardEl.appendChild(sq);
+    }
+  }
+
+  btnLoadFen.onclick = () => {
+    const valid = analyzeChess.load(fenAnalyzeInput.value.trim());
+    if (valid) {
+      fenAnalyzeInput.style.borderColor = "var(--line-strong)";
+      renderAnalyzeBoard();
+      top5List.innerHTML = `<li style="justify-content: center; color: var(--muted); background: transparent; border: none;">Position loaded. Press Analyze Top 5.</li>`;
+    } else {
+      fenAnalyzeInput.style.borderColor = "var(--rose)";
+    }
+  };
+
+  btnAnalyze.onclick = async () => {
+    btnAnalyze.disabled = true;
+    btnAnalyze.textContent = "Analyzing...";
+    top5List.innerHTML = `<li style="justify-content: center; color: var(--muted); background: transparent; border: none;">Running inference...</li>`;
+    
+    if (firstRequest) { wakeBanner.classList.add("show"); firstRequest = false; }
+
+    try {
+      if(!hfClient) {
+        const { Client } = await import("https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js");
+        hfClient = await Client.connect(HF_SPACE_NAME);
+      }
+
+      // Explicitly hit the "analyze" endpoint
+      const response = await hfClient.predict("/analyze", [analyzeChess.fen()]);
+      wakeBanner.classList.remove("show");
+
+      const data = response.data[0];
+      top5List.innerHTML = "";
+      
+      if(data.top_moves && data.top_moves.length > 0) {
+        data.top_moves.forEach(m => {
+          const li = document.createElement("li");
+          li.innerHTML = `<span class="rank">${m.rank}</span><span class="san">${m.san}</span><span class="uci">${m.uci}</span>`;
+          top5List.appendChild(li);
+        });
+      } else {
+        top5List.innerHTML = `<li style="justify-content: center; color: var(--rose); background: transparent; border: none;">No moves found (Game over?)</li>`;
+      }
+    } catch(e) {
+      wakeBanner.classList.remove("show");
+      top5List.innerHTML = `<li style="justify-content: center; color: var(--rose); background: transparent; border: none;">Error: ${e.message}</li>`;
+    } finally {
+      btnAnalyze.disabled = false;
+      btnAnalyze.textContent = "Analyze Top 5";
+    }
+  };
+
 })();
 </script>
 </body>
