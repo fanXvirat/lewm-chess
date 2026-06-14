@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LeWM-Chess — A Latent World Model That Imagines Chess</title>
+<title>LeWM-Chess A Latent World Model That Imagines Chess</title>
 <meta name="description" content="A JEPA-style latent world model trained on ~1M chess positions from raw pixels. Interactive research report: architecture, training dynamics, causal probes, and games against Stockfish.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -437,7 +437,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <h1>A network that plays chess by <em>imagining</em> the future.</h1>
     <p class="sub">No FENs. No bitboards. No rules. A ViT watches rendered board frames,
     compresses each into a 256-dimensional thought, and an action-conditioned predictor
-    learns what that thought becomes when a move is played — the JEPA world-model recipe,
+    learns what that thought becomes when a move is played the JEPA world-model recipe,
     at chess scale, on a single H100.</p>
     <div class="chips">
       <div class="chip c1"><b data-count="100" data-suffix="%">0%</b><span>legal moves</span></div>
@@ -453,7 +453,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <div class="heroviz">
     <canvas id="heroCanvas" width="1080" height="1080" aria-label="Animation of a chess position dissolving into latent space and reforming as the next position"></canvas>
     <div class="phase" id="heroPhase">encode &middot; z<sub>t</sub></div>
-    <div class="tag">the model's actual input rendering — pieces are colored disks, one square per ViT patch</div>
+    <div class="tag">the model's actual input rendering pieces are colored disks, one square per ViT patch</div>
   </div>
 </header>
 
@@ -461,8 +461,8 @@ code{white-space:normal;overflow-wrap:anywhere}
 <section id="abstract">
   <div class="eyebrow rv"><span class="sq"></span>a · abstract</div>
   <h2 class="rv">Predict in representation space, <em>plan in imagination.</em></h2>
-  <p class="lede rv">LeWM-Chess is a single end-to-end network — ViT-Tiny encoder, AdaLN-zero
-  autoregressive predictor, legality-masked policy head, bounded value head — trained on
+  <p class="lede rv">LeWM-Chess is a single end-to-end network ViT-Tiny encoder, AdaLN-zero
+  autoregressive predictor, legality-masked policy head, bounded value head trained on
   <b>942,240 positions</b> rendered from 10,000 elite games. It builds on the LeWM architecture
   (<a href="https://arxiv.org/abs/2603.19312">arXiv:2603.19312</a>) and Yann LeCun's JEPA program:
   rather than reconstructing pixels, the model predicts its own future <em>embeddings</em>,
@@ -503,7 +503,7 @@ code{white-space:normal;overflow-wrap:anywhere}
       </div>
       <div class="loss rv" style="--accent:var(--rose);margin-top:14px">
         <h4>What it is not (yet)</h4>
-        <p>A strong engine. It loses to full-strength Stockfish — honestly shown in section i.
+        <p>A strong engine. It loses to full-strength Stockfish honestly shown in section i.
         The contribution is the <em>world model</em>, the substrate planning will run on.</p>
       </div>
     </div>
@@ -516,7 +516,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <h2 class="rv">One latent space. <em>Three jobs:</em> perceive, predict, act.</h2>
   <p class="rv">Press <b>play</b> to watch a 16-frame window flow through the network: the encoder
   turns each rendered board into a 256-d latent <code>z</code>, the move embedder injects the action,
-  and the 8-block AdaLN-zero predictor rolls the future forward <code>K=4</code> steps —
+  and the 8-block AdaLN-zero predictor rolls the future forward <code>K=4</code> steps
   the same autoregressive computation used at inference, trained directly.</p>
   <div class="pipe-wrap rv">
     <div class="pipe-controls">
@@ -534,7 +534,7 @@ code{white-space:normal;overflow-wrap:anywhere}
       <h4>Renderer → ViT-Tiny encoder</h4>
       <span class="f">128×128 px · patch 16 · one square per patch</span>
       <p>Pieces are drawn as twelve distinct colored disks, so each ViT patch contains exactly one
-      square — the cleanest possible visual tokenization of a board. A 192→2048→256 MLP projects
+      square the cleanest possible visual tokenization of a board. A 192→2048→256 MLP projects
       into the shared latent space.</p>
     </div>
     <div class="loss rv" style="--accent:var(--mint)">
@@ -554,7 +554,7 @@ code{white-space:normal;overflow-wrap:anywhere}
       <h4>Policy &amp; value heads</h4>
       <span class="f">legality-masked logits · tanh-bounded value</span>
       <p>The same latents feed a 20k-way policy head (masked to legal moves at play time) and a
-      tanh(cp/400)-style value head — readouts of the world model, ready for an RL planning stage.</p>
+      tanh(cp/400)-style value head readouts of the world model, ready for an RL planning stage.</p>
     </div>
   </div>
 </section>
@@ -573,7 +573,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <div class="loss rv" style="--accent:var(--lav)">
       <h4>Jacobian contraction penalty</h4>
       <span class="f">β·‖J<sub>v</sub>‖² via Hutchinson, β=10⁻³</span>
-      <p>One stochastic matvec per step pushes the latent map toward Lipschitz L ≤ 1 — so rollout
+      <p>One stochastic matvec per step pushes the latent map toward Lipschitz L ≤ 1 so rollout
       error grows linearly, not exponentially.</p>
     </div>
     <div class="loss rv" style="--accent:var(--mint)">
@@ -585,7 +585,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <div class="loss rv" style="--accent:var(--orchid)">
       <h4>InfoNCE action contrast</h4>
       <span class="f">true move vs. shuffled move · cosine logits</span>
-      <p>Different moves must produce distinguishable latent futures — exactly the signal a planner
+      <p>Different moves must produce distinguishable latent futures exactly the signal a planner
       needs to compare actions.</p>
     </div>
     <div class="loss rv" style="--accent:var(--ice)">
@@ -602,7 +602,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     </div>
   </div>
 
-  <h3 class="rv">Training dynamics — 703,529 windows · 10 epochs · batch 256 · bf16 · one H100</h3>
+  <h3 class="rv">Training dynamics 703,529 windows · 10 epochs · batch 256 · bf16 · one H100</h3>
   <div class="chart-grid">
     <div class="chart-card rv">
       <h4>Policy accuracy</h4>
@@ -611,7 +611,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     </div>
     <div class="chart-card rv">
       <h4>Total loss</h4>
-      <div class="sub">val loss falls monotonically — the predictor keeps improving as scheduled sampling ramps</div>
+      <div class="sub">val loss falls monotonically the predictor keeps improving as scheduled sampling ramps</div>
       <svg id="lossChart" viewBox="0 0 460 260"></svg>
     </div>
   </div>
@@ -620,11 +620,11 @@ code{white-space:normal;overflow-wrap:anywhere}
 <span class="ep">E004</span> | train loss 1.1305 pred 0.0418 pol_acc 0.139 nr 0.98 | val loss 3.1789 pred 0.0437 pol_acc 0.127 nr 0.98
 <span class="ep">E007</span> | train loss 0.7612 pred 0.0511 pol_acc 0.319 nr 0.97 | val loss 2.5182 pred 0.0534 pol_acc 0.188 nr 0.97
 <span class="ep">E010</span> | train loss 0.6513 pred 0.0595 pol_acc 0.419 nr 0.96 | val loss 2.4042 pred 0.0606 <span class="hl">pol_acc 0.200</span> <span class="hl">nr 0.96</span></pre>
-  <p class="note rv">The quiet hero is <code>nr</code> — the norm ratio of the K-step rollout to its
+  <p class="note rv">The quiet hero is <code>nr</code> the norm ratio of the K-step rollout to its
   target, pinned at ≈1.0 for all ten epochs. Naive latent predictors shrink toward the mean the
   moment they are fed their own outputs; the contraction penalty and scheduled sampling hold this
-  one open. The epoch-10 checkpoint is used everywhere below: every downstream metric — policy,
-  value, causality — is better there, at a negligible cost in raw 1-step prediction.</p>
+  one open. The epoch-10 checkpoint is used everywhere below: every downstream metric policy,
+  value, causality is better there, at a negligible cost in raw 1-step prediction.</p>
 </section>
 
 <!-- ================= e · BEYOND LEWM ================= -->
@@ -638,15 +638,15 @@ code{white-space:normal;overflow-wrap:anywhere}
   Four upgrades attack exactly this.</p>
 
   <div class="chart-card rv">
-    <h4>Theorem 1, live — the Hutchinson Jacobian contraction penalty</h4>
+    <h4>Theorem 1, live the Hutchinson Jacobian contraction penalty</h4>
     <div class="sub">A single stochastic Jacobian-vector product per step adds
     <code>β·‖J<sub>z</sub>v‖²</code> to the loss, squeezing the predictor's Lipschitz constant
-    toward L ≤ 1. Drag L to see why an unregularized rollout dies — and where ours lives.</div>
+    toward L ≤ 1. Drag L to see why an unregularized rollout dies and where ours lives.</div>
     <div class="ctrl">
       <label for="lipSlider">Lipschitz constant L</label>
       <input type="range" id="lipSlider" min="0.85" max="1.35" step="0.01" value="0.98" aria-label="Lipschitz constant of the latent map">
       <b id="lipVal">L = 0.98</b>
-      <span>ε = 0.062 — the model's measured 1-step error</span>
+      <span>ε = 0.062 the model's measured 1-step error</span>
     </div>
     <svg id="boundChart" viewBox="0 0 760 340"></svg>
     <p class="note" style="margin-top:12px">The lavender dots are the <b>measured</b> closed-loop
@@ -659,7 +659,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <div class="chart-card rv" style="margin:0">
       <h4>Scheduled sampling (DAgger-style)</h4>
       <div class="sub">During training, the predictor's own outputs are mixed back into its context
-      with probability p annealed 0 → 0.5 — so it learns on the error distribution it will face
+      with probability p annealed 0 → 0.5 so it learns on the error distribution it will face
       when imagining. Drag the epoch slider to see the context window change:</div>
       <div class="ctrl" style="margin-bottom:8px">
         <label for="ssSlider">Epoch</label>
@@ -691,12 +691,12 @@ code{white-space:normal;overflow-wrap:anywhere}
     <tbody>
       <tr><td>Rollout training</td>
         <td class="bad">1-step, teacher-forced</td>
-        <td class="good">K = 4 multi-step with discount γ = 0.9 — trains the deployed computation</td></tr>
+        <td class="good">K = 4 multi-step with discount γ = 0.9 trains the deployed computation</td></tr>
       <tr><td>Error growth</td>
         <td class="bad">unconstrained L → exponential ε·Lᵏ</td>
         <td class="good">Hutchinson ‖J‖ penalty → L ≤ 1, linear growth, drift saturates at 0.62</td></tr>
       <tr><td>Train / inference gap</td>
-        <td class="bad">exposure bias — never sees its own errors</td>
+        <td class="bad">exposure bias never sees its own errors</td>
         <td class="good">scheduled sampling, p: 0 → 0.5 across training</td></tr>
       <tr><td>Action signal</td>
         <td class="bad">actions can be ignored if states are predictive</td>
@@ -718,7 +718,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   collapses only when given the truth.</p>
   <div class="chart-card rv">
     <h4>Action-conditional prediction error (latent MSE, 78k held-out windows)</h4>
-    <div class="sub">lower is better — only the true action unlocks the future</div>
+    <div class="sub">lower is better only the true action unlocks the future</div>
     <svg id="causalChart" viewBox="0 0 760 320"></svg>
   </div>
   <div class="bigstats">
@@ -738,10 +738,10 @@ code{white-space:normal;overflow-wrap:anywhere}
   <h2 class="rv">Closed-loop rollouts: feeding the model <em>its own dreams.</em></h2>
   <div class="twocol">
     <div>
-      <p class="rv">From the starting position, the predictor is rolled forward on its own outputs —
-      no ground-truth frames — and compared against re-encoded reality at every step. This is the
+      <p class="rv">From the starting position, the predictor is rolled forward on its own outputs
+      no ground-truth frames and compared against re-encoded reality at every step. This is the
       regime where unregularized latent models diverge exponentially.</p>
-      <p class="rv">LeWM-Chess drifts, then <b>saturates</b> near 0.62 latent MSE — comfortably
+      <p class="rv">LeWM-Chess drifts, then <b>saturates</b> near 0.62 latent MSE comfortably
       below the 0.43 error of a single wrong move compounding. The Jacobian contraction penalty is
       doing exactly what Theorem&nbsp;1 promises: linear-not-exponential error growth, and a stable
       horizon of several plies of usable imagination.</p>
@@ -766,7 +766,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <div class="bigstat rv"><b style="color:var(--butter)">≈ 1.0</b><span>per-dimension std (SIGReg target)</span></div>
   </div>
   <p class="rv">SIGReg holds every dimension at unit variance with a near-diagonal correlation
-  matrix — no collapse, no redundancy — while the task compresses meaning into an effective rank
+  matrix — no collapse, no redundancy while the task compresses meaning into an effective rank
   of ~30. The space is healthy <em>and</em> economical.</p>
   <div class="twocol">
     <figure class="figure rv">
@@ -785,7 +785,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <div class="eyebrow rv"><span class="sq"></span>i · playing stockfish</div>
   <h2 class="rv">Real games, replayed. <em>Toggle to see what the model sees.</em></h2>
   <p class="rv">Both games below were played by the epoch-10 checkpoint as White against
-  full-strength Stockfish. It loses — and the losses are shown unedited — but watch the openings:
+  full-strength Stockfish. It loses and the losses are shown unedited but watch the openings:
   a textbook <b>Najdorf English Attack</b> structure and a <b>Rossolimo Sicilian</b>, theory it
   reconstructed from pixels alone. Step through, or press play.</p>
 
@@ -912,7 +912,7 @@ code{white-space:normal;overflow-wrap:anywhere}
       <div class="play-info">
         <h4>How it works</h4>
         <p>Your move is sent as a FEN string to the model's policy head. It picks the
-        highest-scoring legal move from its 20k-vocabulary logit output — no search, pure imagination.</p>
+        highest-scoring legal move from its 20k-vocabulary logit output no search, pure imagination.</p>
         <p>The model was never told the rules of chess. Every legal-move guarantee comes
         from a legality mask applied to the raw logits at inference time.</p>
       </div>
