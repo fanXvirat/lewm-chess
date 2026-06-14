@@ -2,7 +2,7 @@
 
 # ♟ LeWM-Chess
 
-### A latent world model that learns chess by *imagining* the future — not by searching it.
+### A latent world model that learns chess by *imagining* the future not by searching it.
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
@@ -27,7 +27,7 @@ and learns an **action-conditioned autoregressive predictor** that answers one q
 > *"If this move is played, what will the world look like next?"*
 
 A legality-masked policy head and a bounded value head ride on top of the same
-latent space — so the same representation that *imagines* futures also *acts*.
+latent space so the same representation that *imagines* futures also *acts*.
 This is a chess-scale testbed for the JEPA/world-model thesis: predict in
 representation space, not pixel space, and plan inside your own imagination.
 
@@ -79,7 +79,7 @@ naive latent predictors:
 | **Multi-step rollout loss** (K=4, γ=0.9) | Trains the *deployed* autoregressive computation; kills exposure bias. Error grows ≤ ε·(Lᵏ−1)/(L−1) |
 | **Hutchinson Jacobian contraction penalty** | Pushes the latent map toward Lipschitz L ≤ 1 → linear, not exponential, rollout drift |
 | **Scheduled sampling** (DAgger-style, 0 → 0.5) | The predictor trains on its *own* error distribution |
-| **InfoNCE action contrast** | Different moves must produce distinguishable latent deltas — the planner's signal |
+| **InfoNCE action contrast** | Different moves must produce distinguishable latent deltas the planner's signal |
 | **SIGReg** (Epps–Pulley ECF statistic) | Anti-collapse regularizer; keeps all 256 dims Gaussian-healthy (0 dead dims, effective rank 30) |
 
 Plus a legality-masked policy head and a tanh(cp/400)-style bounded value head.
@@ -96,7 +96,7 @@ E010 | train loss 0.6513 pred 0.0595 pol_acc 0.419 nr 0.96 | val loss 2.4042 pre
 ```
 
 `nr` (norm ratio ≈ 1.0 throughout) is the key v2 health metric: the predictor does
-**not** shrink toward the mean when rolled out on its own outputs — the collapse
+**not** shrink toward the mean when rolled out on its own outputs the collapse
 mode that kills naive latent world models.
 
 ## Quickstart
