@@ -469,7 +469,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   conditioned on the action taken.</p>
   <p class="rv">The result behaves like a world model, not a move classifier. Given the true move,
   next-state prediction error is <code>0.062</code>; given a different-but-legal move it explodes
-  to <code>0.433</code> — a <b>+0.370 causal planning gap</b>. The policy head never proposes an
+  to <code>0.433</code> a <b>+0.370 causal planning gap</b>. The policy head never proposes an
   illegal move, matches Stockfish's top choice 38% of the time, and its median chosen move costs
   just 12 centipawns. All from images.</p>
 </section>
@@ -480,7 +480,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <h2 class="rv">Engines search the game. <em>This model searches its head.</em></h2>
   <div class="twocol">
     <div>
-      <p class="rv">Classical engines plan by querying a perfect simulator — the rules of chess —
+      <p class="rv">Classical engines plan by querying a perfect simulator the rules of chess
       millions of times per second. Animals don't get a simulator. They build one: an internal
       model of how the world responds to their actions, then plan inside it.</p>
       <p class="rv">That is the bet of the JEPA/world-model research program: <b>learn the dynamics
@@ -632,7 +632,7 @@ code{white-space:normal;overflow-wrap:anywhere}
   <div class="eyebrow rv"><span class="sq"></span>e · beyond lewm</div>
   <h2 class="rv">Base LeWM predicts one step. <em>Chess punishes that.</em></h2>
   <p class="lede rv">The base architecture is trained teacher-forced: predict z<sub>t+1</sub> from
-  the <i>true</i> z<sub>t</sub>. But at planning time the model must run on its <i>own</i> outputs —
+  the <i>true</i> z<sub>t</sub>. But at planning time the model must run on its <i>own</i> outputs
   and any per-step error ε compounds through the latent map's Lipschitz constant L as
   <code>ε·(Lᵏ−1)/(L−1)</code>. If L&nbsp;&gt;&nbsp;1, imagination explodes exponentially.
   Four upgrades attack exactly this.</p>
@@ -651,7 +651,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <svg id="boundChart" viewBox="0 0 760 340"></svg>
     <p class="note" style="margin-top:12px">The lavender dots are the <b>measured</b> closed-loop
     drift from section g. At L ≈ 0.98 the theoretical bound saturates near
-    ε/(1−L) ≈ 0.65 — almost exactly the plateau the trained model exhibits (0.62).
+    ε/(1−L) ≈ 0.65 almost exactly the plateau the trained model exhibits (0.62).
     The penalty isn't decoration; it predicts the model's behavior.</p>
   </div>
 
@@ -766,7 +766,7 @@ code{white-space:normal;overflow-wrap:anywhere}
     <div class="bigstat rv"><b style="color:var(--butter)">≈ 1.0</b><span>per-dimension std (SIGReg target)</span></div>
   </div>
   <p class="rv">SIGReg holds every dimension at unit variance with a near-diagonal correlation
-  matrix — no collapse, no redundancy while the task compresses meaning into an effective rank
+  matrix no collapse, no redundancy while the task compresses meaning into an effective rank
   of ~30. The space is healthy <em>and</em> economical.</p>
   <div class="twocol">
     <figure class="figure rv">
